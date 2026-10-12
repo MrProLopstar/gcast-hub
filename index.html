@@ -59,7 +59,7 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
   <header>
     <h1><a href="./">gcast<span>hub</span></a></h1>
     <input id="search" type="search" placeholder="Поиск по открытым видео">
-    <nav class="row"><a href="https://mrprolopstar.github.io/glyphcast/">Конвертер</a><a href="https://github.com/MrProLopstar/glyphcast">glyphcast</a></nav>
+    <nav class="row"><a href="https://mrprolopstar.github.io/glyphcast/">Песочница и конвертер</a><a href="https://github.com/MrProLopstar/glyphcast">glyphcast</a></nav>
   </header>
 
   <section id="watch" class="watch" hidden></section>
@@ -68,7 +68,7 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
     <p class="empty" id="empty" hidden>Пока пусто. Загрузите первое видео со свободной лицензией.</p>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="upload">
     <h2>Загрузить</h2>
     <p class="status">Готовый <code>.gcast</code> до 100 МБ. Видео сделайте в <a href="https://mrprolopstar.github.io/glyphcast/">конвертере</a> или командой <code>npx glyphcast encode видео.mp4 --embed --poster</code>. В общий список попадают видео со свободной лицензией, остальные открываются по ссылке.</p>
     <div class="row">
