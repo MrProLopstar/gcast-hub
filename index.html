@@ -76,6 +76,18 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
     <p class="empty" id="empty" hidden>Пока пусто. Загрузите первое видео со свободной лицензией.</p>
   </section>
 
+  <section class="panel" id="live">
+    <h2>Прямой эфир</h2>
+    <p class="status">Камера или экран превращаются в символы прямо в браузере и уходят зрителям: в хаб, во встроенный плеер и в консоль. Нужен ключ загрузки из блока ниже. Звук пока не передаётся.</p>
+    <div class="row">
+      <input id="room" type="text" placeholder="Название эфира, латиницей" value="live">
+      <button id="live-camera" type="button">Камера</button>
+      <button id="live-screen" type="button">Экран</button>
+      <button id="live-stop" type="button" disabled>Остановить</button>
+    </div>
+    <p class="status" id="live-status"></p>
+  </section>
+
   <section class="panel" id="upload">
     <h2>Загрузить</h2>
     <p class="status">Готовый <code>.gcast</code> до 100 МБ. Видео сделайте в <a href="https://mrprolopstar.github.io/glyphcast/">конвертере</a> или командой <code>npx glyphcast encode видео.mp4 --embed --poster</code>. В общий список попадают видео со свободной лицензией, остальные открываются по ссылке.</p>
@@ -102,7 +114,7 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
   </section>
 </main>
 <script type="module">
-import 'https://cdn.jsdelivr.net/npm/glyphcast@0.11/dist/element.js/+esm';
+import 'https://cdn.jsdelivr.net/npm/glyphcast@0.13/dist/element.js/+esm';
 
 const WORKER = (await (await fetch('./hub.json', { cache: 'no-cache' })).json()).files;
 const $ = (id) => document.getElementById(id);
@@ -171,9 +183,83 @@ $('search').addEventListener('input', () => {
   renderList();
 });
 
+const watchLive = (room) => {
+  if (!/^[\w-]{1,40}$/.test(room)) return;
+  document.title = `Эфир ${room} · gcast hub`;
+  $('watch').hidden = false;
+  $('watch').innerHTML = `<glyph-player src="${WORKER}/live/${room}.gcast" mode="braille" cols="160" autoplay muted></glyph-player>
+    <h2>Прямой эфир: ${escape(room)}</h2>
+    <div class="meta">Если эфир ещё не начался, обновите страницу, когда он стартует.</div>
+    <pre>npx glyphcast play live:${escape(room)}</pre>`;
+};
+
 const key = new URLSearchParams(location.search).get('v');
+const room = new URLSearchParams(location.search).get('live');
 if (key) watch(key);
+else if (room) watchLive(room);
 renderList();
+
+let broadcast = null;
+const stopLive = () => {
+  if (!broadcast) return;
+  clearInterval(broadcast.timer);
+  broadcast.socket.close();
+  for (const track of broadcast.media.getTracks()) track.stop();
+  broadcast = null;
+  $('live-stop').disabled = true;
+  $('live-status').textContent = 'Эфир остановлен.';
+};
+
+const startLive = async (screen) => {
+  stopLive();
+  const name = $('room').value.trim();
+  if (!/^[\w-]{1,40}$/.test(name)) {
+    $('live-status').textContent = 'Название: латинские буквы, цифры, дефис, до 40 символов.';
+    return;
+  }
+  if (!$('key').value) {
+    $('live-status').textContent = 'Введите ключ загрузки в блоке ниже.';
+    return;
+  }
+  try {
+    const { Encoder } = await import('https://cdn.jsdelivr.net/npm/glyphcast@0.13/dist/format.js/+esm');
+    const media = screen ? await navigator.mediaDevices.getDisplayMedia({ video: true }) : await navigator.mediaDevices.getUserMedia({ video: true });
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = media;
+    await video.play();
+    const cols = 160;
+    const fps = 15;
+    const rows = Math.max(1, Math.round(cols * (video.videoHeight / video.videoWidth) * 0.6));
+    const canvas = new OffscreenCanvas(cols, rows);
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const socket = new WebSocket(`${WORKER.replace(/^http/, 'ws')}/live/${name}/broadcast?key=${encodeURIComponent($('key').value)}`);
+    socket.binaryType = 'arraybuffer';
+    await new Promise((resolve, reject) => {
+      socket.addEventListener('open', resolve, { once: true });
+      socket.addEventListener('error', () => reject(new Error('сервер не принял трансляцию, проверьте ключ')), { once: true });
+    });
+    const encoder = new Encoder({ cols, rows, fps, chunkFrames: fps }, (bytes) => socket.readyState === 1 && socket.send(bytes));
+    const timer = setInterval(() => {
+      context.drawImage(video, 0, 0, cols, rows);
+      encoder.add(context.getImageData(0, 0, cols, rows).data);
+    }, 1000 / fps);
+    broadcast = { socket, media, timer };
+    socket.addEventListener('close', stopLive);
+    for (const track of media.getVideoTracks()) track.addEventListener('ended', stopLive);
+    $('live-stop').disabled = false;
+    const link = new URL(`?live=${name}`, location.href).href;
+    $('live-status').innerHTML = `В эфире. Смотреть: <a href="${link}" target="_blank" rel="noopener">${escape(link)}</a> или <code>npx glyphcast play live:${escape(name)}</code>`;
+  } catch (error) {
+    stopLive();
+    $('live-status').textContent = `Не получилось: ${error.message}`;
+  }
+};
+
+$('live-camera').addEventListener('click', () => startLive(false));
+$('live-screen').addEventListener('click', () => startLive(true));
+$('live-stop').addEventListener('click', stopLive);
 
 try {
   $('key').value = localStorage.getItem('gcast-hub-key') ?? '';

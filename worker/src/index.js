@@ -114,10 +114,84 @@ const serveFile = async (request, env, name) => {
   return new Response(request.method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: out });
 };
 
+export class Room {
+  constructor() {
+    this.header = null;
+    this.latest = null;
+    this.viewers = new Set();
+  }
+
+  async fetch(request) {
+    if (request.headers.get('upgrade') === 'websocket') {
+      const [client, server] = Object.values(new WebSocketPair());
+      server.accept();
+      try {
+        this.socket?.close(1000, 'Replaced by a new broadcast');
+      } catch {}
+      this.socket = server;
+      this.header = null;
+      this.latest = null;
+      let queue = Promise.resolve();
+      server.addEventListener('message', (event) => {
+        queue = queue.then(async () => {
+          if (this.socket !== server) return;
+          const bytes = event.data instanceof ArrayBuffer ? new Uint8Array(event.data) : typeof event.data === 'string' ? null : new Uint8Array(await event.data.arrayBuffer());
+          if (!bytes) return;
+          if (!this.header) {
+            this.header = bytes;
+            return;
+          }
+          this.latest = bytes;
+          for (const viewer of this.viewers) {
+            try {
+              viewer.enqueue(bytes);
+            } catch {
+              this.viewers.delete(viewer);
+            }
+          }
+        });
+      });
+      server.addEventListener('close', () => {
+        if (this.socket !== server) return;
+        this.socket = null;
+        for (const viewer of this.viewers) {
+          try {
+            viewer.close();
+          } catch {}
+        }
+        this.viewers.clear();
+        this.header = null;
+        this.latest = null;
+      });
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    if (!this.header) return json({ error: 'Nobody is streaming here now' }, 404);
+    const viewers = this.viewers;
+    const opening = [this.header, this.latest].filter(Boolean);
+    let self;
+    const readable = new ReadableStream({
+      start(controller) {
+        self = controller;
+        for (const bytes of opening) controller.enqueue(bytes);
+        viewers.add(controller);
+      },
+      cancel() {
+        viewers.delete(self);
+      },
+    });
+    return new Response(readable, { headers: { ...CORS, 'content-type': 'application/octet-stream', 'cache-control': 'no-store' } });
+  }
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     const url = new URL(request.url);
+    const live = /^\/live\/([\w-]{1,40})(\.gcast|\/broadcast)$/.exec(url.pathname);
+    if (live) {
+      if (live[2] === '/broadcast' && (!env.HUB_KEY || url.searchParams.get('key') !== env.HUB_KEY)) return json({ error: 'Wrong upload key' }, 403);
+      return env.ROOM.get(env.ROOM.idFromName(live[1])).fetch(request);
+    }
     try {
       const file = /^\/v\/([\w-]{11})\.(gcast|jpg|vtt)$/.exec(url.pathname);
       if (file && (request.method === 'GET' || request.method === 'HEAD')) return serveFile(request, env, `${file[1]}.${file[2]}`);
