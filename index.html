@@ -202,8 +202,12 @@ $('send').addEventListener('click', async () => {
     });
     const image = $('poster').files?.[0];
     if (image) await send(`${WORKER}/poster/${entry.id}`, image);
+    if (entry.listed) {
+      videos = [{ ...entry, poster: Boolean(image) }, ...videos.filter((video) => video.id !== entry.id)];
+      renderList();
+    }
     const link = new URL(`?v=${entry.listed ? entry.slug : entry.id}${entry.listed ? '' : `&t=${encodeURIComponent(entry.title)}`}`, location.href).href;
-    $('status').innerHTML = `Готово: <a href="${link}">${escape(link)}</a>${entry.listed ? '. В общем списке появится через минуту, после обновления сайта.' : ''}`;
+    $('status').innerHTML = `Готово: <a href="${link}">${escape(link)}</a>${entry.listed ? '. Видео уже в списке выше; у других посетителей оно появится через минуту.' : ''}`;
   } catch (error) {
     $('status').textContent = `Не получилось: ${error.message}`;
   } finally {
