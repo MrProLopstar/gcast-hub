@@ -82,6 +82,7 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
     <div class="row">
       <label class="button">Файл .gcast<input id="file" type="file" accept=".gcast" hidden></label>
       <label class="button">Постер .jpg<input id="poster" type="file" accept="image/jpeg" hidden></label>
+      <label class="button">Субтитры .vtt, .srt<input id="captions" type="file" accept=".vtt,.srt" hidden></label>
       <input id="title" type="text" placeholder="Название">
     </div>
     <div class="row">
@@ -101,7 +102,7 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
   </section>
 </main>
 <script type="module">
-import 'https://cdn.jsdelivr.net/npm/glyphcast@0.8/dist/element.js/+esm';
+import 'https://cdn.jsdelivr.net/npm/glyphcast@0.11/dist/element.js/+esm';
 
 const WORKER = (await (await fetch('./hub.json', { cache: 'no-cache' })).json()).files;
 const $ = (id) => document.getElementById(id);
@@ -145,10 +146,22 @@ const watch = (key) => {
   const title = video?.title ?? new URLSearchParams(location.search).get('t') ?? 'Видео по ссылке';
   document.title = `${title} · gcast hub`;
   $('watch').hidden = false;
-  $('watch').innerHTML = `<glyph-player src="${WORKER}/v/${id}.gcast"${video?.poster ? ` poster="${WORKER}/v/${id}.jpg"` : ''} mode="braille" cols="160"></glyph-player>
+  const name = video?.slug ?? id;
+  const page = new URL(`?v=${encodeURIComponent(name)}`, location.href).href;
+  const embed = `<iframe src="${new URL(`embed.html?v=${encodeURIComponent(name)}`, location.href).href}" width="800" height="450" allow="fullscreen; picture-in-picture; autoplay" style="border:0;border-radius:12px"></iframe>`;
+  $('watch').innerHTML = `<glyph-player src="${WORKER}/v/${id}.gcast"${video?.poster ? ` poster="${WORKER}/v/${id}.jpg"` : ''}${video?.subtitles ? ` subtitles="${WORKER}/v/${id}.vtt"` : ''} mode="braille" cols="160"></glyph-player>
     <h2>${escape(title)}</h2>
     <div class="meta">${video ? `<span class="badge">${LICENSE[video.license] ?? video.license}</span> ${clock(video.duration)} · добавлено ${video.added}` : 'Не в общем списке'}</div>
-    <pre>npx glyphcast play hub:${escape(video?.slug ?? id)}</pre>`;
+    <div class="row"><button type="button" data-copy="${escape(page)}">Скопировать ссылку</button><button type="button" data-copy="${escape(embed)}">Код для вставки на сайт</button></div>
+    <pre>npx glyphcast play hub:${escape(name)}</pre>`;
+  for (const button of $('watch').querySelectorAll('[data-copy]')) {
+    button.addEventListener('click', async () => {
+      const label = button.textContent;
+      await navigator.clipboard.writeText(button.dataset.copy);
+      button.textContent = 'Скопировано';
+      setTimeout(() => (button.textContent = label), 1500);
+    });
+  }
 };
 
 $('search').addEventListener('input', () => {
@@ -210,8 +223,10 @@ $('send').addEventListener('click', async () => {
     });
     const image = $('poster').files?.[0];
     if (image) await send(`${WORKER}/poster/${entry.id}`, image);
+    const captions = $('captions').files?.[0];
+    if (captions) await send(`${WORKER}/subtitles/${entry.id}`, captions);
     if (entry.listed) {
-      videos = [{ ...entry, poster: Boolean(image) }, ...videos.filter((video) => video.id !== entry.id)];
+      videos = [{ ...entry, poster: Boolean(image), subtitles: Boolean(captions) }, ...videos.filter((video) => video.id !== entry.id)];
       renderList();
     }
     const link = new URL(`?v=${entry.listed ? entry.slug : entry.id}${entry.listed ? '' : `&t=${encodeURIComponent(entry.title)}`}`, location.href).href;

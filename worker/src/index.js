@@ -90,6 +90,15 @@ const poster = async (request, env, id) => {
   return json({ ok: true });
 };
 
+const subtitles = async (request, env, id) => {
+  if (!env.HUB_KEY || request.headers.get('x-hub-key') !== env.HUB_KEY) return json({ error: 'Wrong upload key' }, 403);
+  await upload(env, `${id}.vtt`, request.body, 'text/vtt; charset=utf-8', Number(request.headers.get('content-length') ?? 0));
+  await catalog(env, (videos) => videos.map((video) => (video.id === id ? { ...video, subtitles: true } : video)));
+  return json({ ok: true });
+};
+
+const TYPES = { jpg: 'image/jpeg', vtt: 'text/vtt; charset=utf-8', gcast: 'application/octet-stream' };
+
 const serveFile = async (request, env, name) => {
   const headers = new Headers({ 'user-agent': 'gcast-hub' });
   const range = request.headers.get('range');
@@ -100,7 +109,7 @@ const serveFile = async (request, env, name) => {
     const value = upstream.headers.get(key);
     if (value) out.set(key, value);
   }
-  out.set('content-type', name.endsWith('.jpg') ? 'image/jpeg' : 'application/octet-stream');
+  out.set('content-type', TYPES[name.split('.').pop()] ?? 'application/octet-stream');
   out.set('cache-control', 'public, max-age=86400');
   return new Response(request.method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: out });
 };
@@ -110,11 +119,13 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     const url = new URL(request.url);
     try {
-      const file = /^\/v\/([\w-]{11})\.(gcast|jpg)$/.exec(url.pathname);
+      const file = /^\/v\/([\w-]{11})\.(gcast|jpg|vtt)$/.exec(url.pathname);
       if (file && (request.method === 'GET' || request.method === 'HEAD')) return serveFile(request, env, `${file[1]}.${file[2]}`);
       if (url.pathname === '/upload' && request.method === 'POST') return publish(request, env, url);
       const image = /^\/poster\/([\w-]{11})$/.exec(url.pathname);
       if (image && request.method === 'POST') return poster(request, env, image[1]);
+      const captions = /^\/subtitles\/([\w-]{11})$/.exec(url.pathname);
+      if (captions && request.method === 'POST') return subtitles(request, env, captions[1]);
       if (url.pathname === '/') return json({ hub: env.REPO, files: '/v/<id>.gcast', upload: 'POST /upload?title=&license=&listed=1 with x-hub-key' });
       return json({ error: 'Not found' }, 404);
     } catch (error) {

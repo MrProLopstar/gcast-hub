@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gcast hub</title>
+<meta name="robots" content="noindex">
+<style>
+html, body { margin: 0; height: 100%; background: #000; color: #e8ecef; font: 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+glyph-player { position: absolute; inset: 0; --radius: 0; }
+glyph-player::part(canvas) { object-fit: contain; }
+.brand { position: absolute; top: 10px; right: 12px; padding: 3px 8px; border-radius: 6px; background: rgba(12, 15, 20, 0.8); color: #f0a04b; text-decoration: none; font: 600 12px ui-monospace, Consolas, monospace; opacity: 0.85; z-index: 1; }
+.brand:hover { opacity: 1; }
+.missing { display: grid; place-items: center; height: 100%; color: #8b949e; }
+</style>
+</head>
+<body>
+<script type="module">
+import 'https://cdn.jsdelivr.net/npm/glyphcast@0.11/dist/element.js/+esm';
+
+const key = new URLSearchParams(location.search).get('v') ?? '';
+const [config, videos] = await Promise.all([fetch('./hub.json').then((response) => response.json()), fetch('./videos.json', { cache: 'no-cache' }).then((response) => response.json()).catch(() => [])]);
+const video = videos.find((item) => item.slug === key || item.id === key);
+const id = video?.id ?? key;
+if (!/^[\w-]{11}$/.test(id)) {
+  document.body.innerHTML = '<div class="missing">Видео не найдено</div>';
+} else {
+  const player = document.createElement('glyph-player');
+  player.setAttribute('src', `${config.files}/v/${id}.gcast`);
+  if (video?.poster) player.setAttribute('poster', `${config.files}/v/${id}.jpg`);
+  if (video?.subtitles) player.setAttribute('subtitles', `${config.files}/v/${id}.vtt`);
+  player.setAttribute('mode', 'braille');
+  player.setAttribute('fullsize', '');
+  const brand = document.createElement('a');
+  brand.className = 'brand';
+  brand.href = new URL(`./?v=${encodeURIComponent(video?.slug ?? id)}`, location.href).href;
+  brand.target = '_blank';
+  brand.rel = 'noopener';
+  brand.textContent = 'gcast hub';
+  document.title = `${video?.title ?? 'Видео'} · gcast hub`;
+  document.body.append(player, brand);
+}
+</script>
+</body>
+</html>
