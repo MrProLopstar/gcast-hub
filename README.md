@@ -7,7 +7,7 @@ npx glyphcast hub                 # list and search
 npx glyphcast play hub:<name>     # watch, with sound, pause and seeking
 ```
 
-Openly licensed videos are listed and searchable. Others are reachable only by their link; the file is still public to anyone who has it.
+Openly licensed videos are listed and searchable, others open by link.
 
 ## How it works
 
