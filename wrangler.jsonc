@@ -1,7 +1,0 @@
-// The hub site: static pages served by Cloudflare on glc-hub.1lop.ru
-{
-  "name": "glc-hub",
-  "compatibility_date": "2026-09-01",
-  "assets": { "directory": "./public", "html_handling": "auto-trailing-slash" },
-  "routes": [{ "pattern": "glc-hub.1lop.ru", "custom_domain": true }]
-}

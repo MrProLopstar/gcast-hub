@@ -20,6 +20,3 @@ new_sqlite_classes = ["Room"]
 tag = "v2"
 new_sqlite_classes = ["Index"]
 
-[[routes]]
-pattern = "glc-api.1lop.ru"
-custom_domain = true
