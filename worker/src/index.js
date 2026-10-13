@@ -234,7 +234,7 @@ const fields = (url, admin) => {
   const source = cleanSource(url.searchParams.get('source'));
   if (!title) return { error: 'A title is needed' };
   if (!LICENSES.includes(license)) return { error: `License must be one of ${LICENSES.join(', ')}` };
-  if (wanted && license === 'own') return { error: 'Only openly licensed videos can be listed; choose a license or keep it unlisted' };
+  if (wanted && license === 'own' && !admin) return { error: 'Only openly licensed videos can be listed; choose a license or keep it unlisted' };
   // without the hub key a video waits for review before it reaches the open list
   return { title, license, listed: wanted && admin, ...(wanted && !admin ? { review: true } : {}), ...(source ? { source } : {}) };
 };
@@ -285,7 +285,7 @@ const adminUpdate = async (request, env, id) => {
   const title = typeof change.title === 'string' && change.title.trim() ? change.title.trim().slice(0, 120) : entry.title;
   const license = typeof change.license === 'string' && LICENSES.includes(change.license) ? change.license : entry.license;
   const wantsListed = typeof change.listed === 'boolean' ? change.listed : entry.listed;
-  if (wantsListed && license === 'own') return json({ error: 'Only openly licensed videos can be listed' }, 400);
+  // the admin may list any video, also without an open license; anonymous uploads still need one to ask for the list
   const source = 'source' in change ? cleanSource(change.source) : entry.source;
   const next = { ...entry, title, license, listed: wantsListed, slug: entry.listed === wantsListed && entry.title === title ? entry.slug : slugify(title) || id };
   if (source) next.source = source;

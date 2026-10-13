@@ -8,7 +8,7 @@ import { sources } from './api';
 
 /** What each license lets people do, in plain words, shown next to the choice. */
 const ABOUT: Record<string, string> = {
-  own: 'Все права у автора. Видео не попадает в общий список, открывается только по ссылке. Подходит для своих роликов и всего, что нельзя раздавать открыто.',
+  own: 'Все права у автора. Без вашего решения видео открывается только по ссылке; в общий список его можно поставить вручную, но при претензии правообладателя придётся убрать.',
   CC0: 'Автор отказался от всех прав: можно копировать, менять и использовать как угодно, даже без указания автора.',
   'CC-BY': 'Можно копировать, менять и использовать, в том числе в коммерции, если указан автор. Так лицензированы фильмы Blender.',
   'CC-BY-SA': 'Как CC BY, но изменённые версии нужно выпускать под той же лицензией.',
@@ -62,7 +62,6 @@ const Item = ({ video, files, who, reload, say, watch }: { video: Video; files: 
     }
   };
   const link = new URL(`./?v=${encodeURIComponent(video.listed ? video.slug : video.id)}`, location.href).href;
-  const open = license !== 'own';
   return (
     <article className={`item${video.review ? ' waiting' : ''}`}>
       <button type="button" className="poster" aria-label="Предпросмотр" onClick={() => watch(video)}>
@@ -96,8 +95,8 @@ const Item = ({ video, files, who, reload, say, watch }: { video: Video; files: 
           ))}
         </select>
         <p>{ABOUT[license]}</p>
-        <label className={`switch${open ? '' : ' off'}`} title={open ? '' : 'В общий список попадают только видео со свободной лицензией'}>
-          <input type="checkbox" checked={listed && open} disabled={!open} onChange={(event) => setListed(event.target.checked)} /> показывать в общем списке
+        <label className="switch">
+          <input type="checkbox" checked={listed} onChange={(event) => setListed(event.target.checked)} /> показывать в общем списке
         </label>
       </div>
       <div className="numbers">
@@ -108,7 +107,7 @@ const Item = ({ video, files, who, reload, say, watch }: { video: Video; files: 
         </span>
       </div>
       <div className="buttons">
-        {video.review && open && (
+        {video.review && (
           <button type="button" className="button primary" disabled={busy} onClick={() => void save({ listed: true })}>
             Одобрить
           </button>
@@ -168,6 +167,16 @@ const Admin = () => {
   }, [videos, filter, query]);
   useEffect(() => setPage(0), [filter, query]);
   const pages = Math.max(1, Math.ceil(shown.length / PAGE));
+  /** Takes every listed video without an open license off the open list, for a takedown request. */
+  const hideOwn = async () => {
+    const targets = (videos ?? []).filter((video) => video.listed && video.license === 'own');
+    for (const [at, video] of targets.entries()) {
+      setStatus(`Скрываю ${at + 1} из ${targets.length}…`);
+      await call(`/admin/videos/${video.id}`, who, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ listed: false }) }).catch(() => undefined);
+    }
+    setStatus(`Скрыто из общего списка: ${targets.length}`);
+    void load();
+  };
   const all = videos ?? [];
   const totals = {
     count: all.length,
@@ -259,7 +268,7 @@ const Admin = () => {
                 <p>{ABOUT[value]}</p>
               </div>
             ))}
-            <p className="note">В общий список можно поставить только видео со свободной лицензией. Если сомневаетесь в правах на ролик, оставьте «Только по ссылке».</p>
+            <p className="note">Ролики «Только по ссылке», поставленные в общий список, можно разом убрать кнопкой «Скрыть несвободные», если придут претензии.</p>
           </section>
         )}
         <div className="toolbar">
@@ -271,6 +280,9 @@ const Admin = () => {
               </button>
             ))}
           </div>
+          <button type="button" className="button ghost danger" disabled={!all.some((video) => video.listed && video.license === 'own')} onClick={() => void hideOwn()}>
+            Скрыть несвободные
+          </button>
           <input type="search" className="find" placeholder="Название или id" value={query} onChange={(event) => setQuery(event.target.value)} />
         </div>
         {status && <p className={status.startsWith('Не') ? 'error' : 'note'}>{status}</p>}
