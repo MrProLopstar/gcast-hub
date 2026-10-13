@@ -572,30 +572,86 @@ const meta = async (env, id) => {
 
 const TYPES = { jpg: 'image/jpeg', vtt: 'text/vtt; charset=utf-8', gcast: 'application/octet-stream' };
 
+const BLOCK = 4 * 1048576;
+
+/** Size of a stored file, remembered next to its Drive id. */
+const fileSize = async (env, name) => {
+  const id = await fileId(env, name);
+  if (!id) return null;
+  const known = await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(name)}`).then((response) => response.json());
+  if (known?.size) return { id, size: known.size };
+  const meta = await drive(env, `/drive/v3/files/${id}?fields=size`).then((response) => response.json());
+  const size = Number(meta.size ?? 0);
+  await rememberFile(env, name, { id, size });
+  return { id, size };
+};
+
+/**
+ * Serves any byte range of a stored file from 4 MB blocks. Each block is fetched from Drive once and then kept in
+ * Cloudflare's cache, so different players asking for different ranges, and later viewers, mostly hit the cache.
+ */
 const serveFile = async (request, env, ctx, name) => {
-  const range = request.headers.get('range');
-  const cache = caches.default;
-  // Drive answers need the token, so Cloudflare does not cache them by itself: keep each answer under the public URL and range
-  const key = new Request(`${new URL(request.url).origin}/v/${name}?range=${encodeURIComponent(range ?? '')}`);
-  if (request.method === 'GET') {
-    const cached = await cache.match(key);
-    if (cached) return cached;
-  }
-  const upstream = await asset(env, name, range);
+  const file = await fileSize(env, name);
   const out = new Headers(CORS);
-  for (const header of ['content-length', 'content-range', 'etag', 'last-modified']) {
-    const value = upstream.headers.get(header);
-    if (value) out.set(header, value);
-  }
   out.set('accept-ranges', 'bytes');
   out.set('content-type', TYPES[name.split('.').pop()] ?? 'application/octet-stream');
   out.set('cache-control', 'public, max-age=86400');
-  if (request.method === 'HEAD' || !upstream.ok) return new Response(null, { status: upstream.ok ? upstream.status : 404, headers: out });
-  // ponytail: answers up to 8 MB (the player's chunk ranges) are read whole and cached; bigger ones stream from Drive
-  if (Number(out.get('content-length') ?? Infinity) > 8 * 1048576) return new Response(upstream.body, { status: upstream.status, headers: out });
-  const body = await upstream.arrayBuffer();
-  ctx.waitUntil(cache.put(key, new Response(body, { status: upstream.status, headers: out })).catch(() => undefined));
-  return new Response(body, { status: upstream.status, headers: out });
+  if (!file || !file.size) return new Response(null, { status: 404, headers: out });
+  const wanted = /bytes=(\d*)-(\d*)/.exec(request.headers.get('range') ?? '');
+  let start = 0;
+  let end = file.size - 1;
+  if (wanted) {
+    if (!wanted[1] && wanted[2]) start = Math.max(0, file.size - Number(wanted[2]));
+    else {
+      start = Number(wanted[1] || 0);
+      if (wanted[2]) end = Math.min(file.size - 1, Number(wanted[2]));
+    }
+    if (start >= file.size || start > end) return new Response(null, { status: 416, headers: { ...CORS, 'content-range': `bytes */${file.size}` } });
+    out.set('content-range', `bytes ${start}-${end}/${file.size}`);
+  }
+  out.set('content-length', String(end - start + 1));
+  if (request.method === 'HEAD') return new Response(null, { status: wanted ? 206 : 200, headers: out });
+  const cache = caches.default;
+  const origin = new URL(request.url).origin;
+  const block = async (index) => {
+    const key = new Request(`${origin}/block/${file.id}/${index}`);
+    const cached = await cache.match(key);
+    if (cached) return new Uint8Array(await cached.arrayBuffer());
+    const from = index * BLOCK;
+    const to = Math.min(file.size, from + BLOCK) - 1;
+    for (let attempt = 1; ; attempt += 1) {
+      const response = await drive(env, `/drive/v3/files/${file.id}?alt=media`, { headers: { range: `bytes=${from}-${to}` } });
+      if (response.status === 206 || response.status === 200) {
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.length === to - from + 1) {
+          ctx.waitUntil(cache.put(key, new Response(bytes, { headers: { 'cache-control': 'public, max-age=604800' } })).catch(() => undefined));
+          return bytes;
+        }
+      }
+      if (attempt >= 3) throw new Error(`Google Drive answered ${response.status} for block ${index}`);
+    }
+  };
+  const first = Math.floor(start / BLOCK);
+  const last = Math.floor(end / BLOCK);
+  let next = first;
+  // the following block is requested while the current one is sent
+  let ahead = block(first);
+  const body = new ReadableStream({
+    async pull(controller) {
+      if (next > last) {
+        controller.close();
+        return;
+      }
+      const index = next;
+      const bytes = await ahead;
+      next += 1;
+      if (next <= last) ahead = block(next);
+      const from = index === first ? start - index * BLOCK : 0;
+      const to = index === last ? end - index * BLOCK + 1 : bytes.length;
+      controller.enqueue(bytes.subarray(from, to));
+    },
+  });
+  return new Response(body, { status: wanted ? 206 : 200, headers: out });
 };
 
 export class Room {
