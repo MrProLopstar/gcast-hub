@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { catalog, clock, fileUrl, licenseName, megabytes, meta, myVote, plural, sources, stats, upload, view, vote, worker, LICENSES, type Stats, type Video } from './api';
-import { Player } from './Player';
+import { Ambient, Player } from './Player';
 import { Live, LiveWatch } from './Live';
 import './hub.css';
 
@@ -172,6 +172,7 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
   return (
     <main className="watch">
       <section>
+        <Ambient key={video.id}>
         <Player
           key={video.id}
           src={fileUrl(files, video, 'gcast')}
@@ -182,6 +183,7 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
           source={video.source}
           onPlay={counted}
         />
+        </Ambient>
         <h1>{video.title}</h1>
         <div className="bar">
           <div className="meta">

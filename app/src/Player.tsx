@@ -39,3 +39,39 @@ export const Player = ({ onPlay, className, ...attributes }: Attributes & { onPl
   }, [onPlay, attributes.src]);
   return <glyph-player ref={element} className={className} />;
 };
+
+/**
+ * A soft glow of the current picture behind the player, like YouTube's ambient mode: about once a second the
+ * frame at the playback time is drawn into a tiny canvas that CSS blurs and spreads around the player.
+ */
+export const Ambient = ({ children }: { children: React.ReactNode }) => {
+  const glow = useRef<HTMLCanvasElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    type Picture = { pixels: Uint8ClampedArray; cols: number; rows: number };
+    type Element = HTMLElement & { player?: { currentTime: number; preview: (seconds: number) => Promise<Picture | null> } };
+    let alive = true;
+    const paint = async () => {
+      const element = box.current?.querySelector('glyph-player') as Element | null;
+      const canvas = glow.current;
+      const picture = await element?.player?.preview(element.player.currentTime).catch(() => null);
+      if (!alive || !canvas || !picture) return;
+      canvas.width = picture.cols;
+      canvas.height = picture.rows;
+      canvas.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(picture.pixels), picture.cols, picture.rows), 0, 0);
+      canvas.classList.add('lit');
+    };
+    const timer = setInterval(() => void paint(), 1000);
+    void paint();
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+  return (
+    <div className="ambient" ref={box}>
+      <canvas ref={glow} aria-hidden="true" />
+      {children}
+    </div>
+  );
+};

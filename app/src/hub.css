@@ -91,3 +91,10 @@ main { padding: 24px; padding-block-end: 64px; }
   .grid { grid-template-columns: 1fr; }
   .side .card { grid-template-columns: 140px minmax(0, 1fr); }
 }
+
+/* ambient glow: the blurred current frame spreads behind the player and fades as the picture changes */
+.ambient { position: relative; isolation: isolate; }
+.ambient > canvas { position: absolute; inset: -4% -3%; width: 106%; height: 108%; z-index: -1; filter: blur(70px) saturate(1.5); opacity: 0; transition: opacity 1.2s; pointer-events: none; }
+.ambient > canvas.lit { opacity: 0.45; }
+@media (prefers-reduced-motion: reduce) { .ambient > canvas { transition: none; } }
+.watch, main { overflow-x: clip; }
