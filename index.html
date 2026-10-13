@@ -53,6 +53,10 @@ button:disabled { opacity: 0.45; cursor: default; }
 glyph-player { border-radius: 14px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55); }
 pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 0; overflow-x: auto; font-size: 13px; }
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.votes { display: inline-flex; gap: 6px; align-items: center; }
+.votes button { min-width: 64px; font-variant-numeric: tabular-nums; }
+.votes button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.source a { color: var(--accent); }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; margin-top: 28px; }
 .panel h2 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
 .panel input[type="text"], .panel input[type="password"] { flex: 1; min-width: 200px; }
@@ -90,12 +94,13 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
 
   <section class="panel" id="upload">
     <h2>Загрузить</h2>
-    <p class="status">Готовый <code>.gcast</code>, большие файлы загружаются частями. Видео сделайте в <a href="https://mrprolopstar.github.io/glyphcast/">конвертере</a> или командой <code>npx glyphcast encode видео.mp4 --embed --poster</code>. В общий список попадают видео со свободной лицензией, остальные открываются по ссылке.</p>
+    <p class="status">Готовый <code>.gcast</code>, большие файлы загружаются частями. Видео сделайте в <a href="https://mrprolopstar.github.io/glyphcast/">конвертере</a> или командой <code>npx glyphcast encode видео.mp4 --embed --poster</code>. Загрузить может любой. Видео со свободной лицензией попадают в общий список после проверки, остальные открываются по ссылке.</p>
     <div class="row">
       <label class="button">Файл .gcast<input id="file" type="file" accept=".gcast" hidden></label>
       <label class="button">Постер .jpg<input id="poster" type="file" accept="image/jpeg" hidden></label>
       <label class="button">Субтитры .vtt, .srt<input id="captions" type="file" accept=".vtt,.srt" hidden></label>
       <input id="title" type="text" placeholder="Название">
+      <input id="source" type="url" placeholder="Ссылка на оригинал (необязательно)">
     </div>
     <div class="row">
       <select id="license">
@@ -106,7 +111,7 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
         <option value="CC-BY-NC">CC BY-NC</option>
         <option value="public-domain">Общественное достояние</option>
       </select>
-      <input id="key" type="password" placeholder="Ключ загрузки">
+      <input id="key" type="password" placeholder="Ключ админа (не обязателен)">
       <button id="send" type="button" disabled>Опубликовать</button>
     </div>
     <div class="bar" hidden><div></div></div>
@@ -114,7 +119,7 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
   </section>
 </main>
 <script type="module">
-import 'https://cdn.jsdelivr.net/npm/glyphcast@0.19.5/dist/element.js/+esm';
+import 'https://cdn.jsdelivr.net/npm/glyphcast@0.20.0/dist/element.js/+esm';
 
 const WORKER = (await (await fetch('./hub.json', { cache: 'no-cache' })).json()).files;
 const $ = (id) => document.getElementById(id);
@@ -137,36 +142,79 @@ try {
 const card = (video) => `<a class="card" href="?v=${encodeURIComponent(video.slug)}">
   <div class="thumb">${video.poster ? `<img loading="lazy" alt="" src="${WORKER}/v/${video.id}.jpg">` : '<div class="glyphs">@#%*</div>'}<time>${clock(video.duration)}</time></div>
   <h3>${escape(video.title)}</h3>
-  <div class="meta"><span class="badge">${LICENSE[video.license] ?? video.license}</span> ${video.cols}×${video.rows} · ${(video.size / 1048576).toFixed(1)} МБ</div>
+  <div class="meta"><span class="badge">${LICENSE[video.license] ?? video.license}</span> ${video.cols}×${video.rows} · ${(video.size / 1048576).toFixed(1)} МБ<span data-views="${video.id}"></span></div>
 </a>`;
 
 const renderList = () => {
   const query = $('search').value.trim().toLowerCase();
   const shown = videos.filter((video) => video.listed && (!query || video.title.toLowerCase().includes(query)));
   $('grid').innerHTML = shown.map(card).join('');
+  if (shown.length) fetch(`${WORKER}/stats?ids=${shown.slice(0, 100).map((video) => video.id).join(',')}`).then((response) => response.json()).then((stats) => {
+    for (const video of shown) {
+      const place = document.querySelector(`[data-views="${video.id}"]`);
+      const found = stats[video.id];
+      if (place && found) place.textContent = ` · ${found.views} ${plural(found.views, 'просмотр', 'просмотра', 'просмотров')}${found.up || found.down ? ` · +${found.up} −${found.down}` : ''}`;
+    }
+  }).catch(() => undefined);
   $('empty').hidden = shown.length > 0;
 };
 
-const watch = (key) => {
-  const video = videos.find((item) => item.slug === key || item.id === key);
+const plural = (count, one, few, many) => {
+  const last = count % 10;
+  const tens = count % 100;
+  return last === 1 && tens !== 11 ? one : last >= 2 && last <= 4 && (tens < 12 || tens > 14) ? few : many;
+};
+
+const showStats = (id, stats) => {
+  const views = $('views');
+  if (!views || !stats) return;
+  views.textContent = `${stats.views} ${plural(stats.views, 'просмотр', 'просмотра', 'просмотров')}`;
+  $('up').textContent = `+ ${stats.up}`;
+  $('down').textContent = `− ${stats.down}`;
+  if (stats.mine !== undefined) {
+    $('up').setAttribute('aria-pressed', String(stats.mine === 1));
+    $('down').setAttribute('aria-pressed', String(stats.mine === -1));
+  }
+};
+
+const watch = async (key) => {
+  let video = videos.find((item) => item.slug === key || item.id === key);
   const id = video?.id ?? key;
   if (!/^[\w-]{11}$/.test(id)) {
     $('watch').hidden = false;
     $('watch').innerHTML = '<p class="empty">Такого видео нет.</p>';
     return;
   }
+  if (!video) video = await fetch(`${WORKER}/meta/${id}`).then((response) => (response.ok ? response.json() : undefined)).catch(() => undefined);
   const title = video?.title ?? new URLSearchParams(location.search).get('t') ?? 'Видео по ссылке';
   document.title = `${title} · gcast hub`;
   $('watch').hidden = false;
-  const name = video?.slug ?? id;
+  const name = video?.listed ? video.slug : id;
   const page = new URL(`?v=${encodeURIComponent(name)}`, location.href).href;
   const embed = `<iframe src="${new URL(`embed.html?v=${encodeURIComponent(name)}`, location.href).href}" width="800" height="450" allow="fullscreen; picture-in-picture; autoplay" style="border:0;border-radius:12px"></iframe>`;
   const sources = video?.variants?.length ? escape(JSON.stringify([{ cols: video.cols, src: `${WORKER}/v/${id}.gcast` }, ...video.variants.map((cols) => ({ cols, src: `${WORKER}/v/${id}-${cols}.gcast` }))])) : '';
-  $('watch').innerHTML = `<glyph-player src="${WORKER}/v/${id}.gcast"${sources ? ` sources="${sources}"` : ''}${video?.poster ? ` poster="${WORKER}/v/${id}.jpg"` : ''}${video?.subtitles ? ` subtitles="${WORKER}/v/${id}.vtt"` : ''} mode="braille" cols="160"></glyph-player>
+  $('watch').innerHTML = `<glyph-player src="${WORKER}/v/${id}.gcast"${sources ? ` sources="${sources}"` : ''}${video?.poster ? ` poster="${WORKER}/v/${id}.jpg"` : ''}${video?.subtitles ? ` subtitles="${WORKER}/v/${id}.vtt"` : ''} heading="${escape(title)}"${video?.source ? ` source="${escape(video.source)}"` : ''} mode="braille" cols="160"></glyph-player>
     <h2>${escape(title)}</h2>
-    <div class="meta">${video ? `<span class="badge">${LICENSE[video.license] ?? video.license}</span> ${clock(video.duration)} · добавлено ${video.added}` : 'Не в общем списке'}</div>
-    <div class="row"><button type="button" data-copy="${escape(page)}">Скопировать ссылку</button><button type="button" data-copy="${escape(embed)}">Код для вставки на сайт</button></div>
+    <div class="meta">${video ? `<span class="badge">${LICENSE[video.license] ?? video.license}</span> ${clock(video.duration)} · добавлено ${video.added}${video.listed ? '' : ' · не в общем списке'}` : 'Не в общем списке'} · <span id="views">…</span></div>
+    ${video?.source ? `<div class="meta source">Оригинал: <a href="${escape(video.source)}" target="_blank" rel="noopener noreferrer">${escape(new URL(video.source).hostname)}</a></div>` : ''}
+    <div class="row">
+      <span class="votes" title="Как видео смотрится в символах"><button type="button" id="up" aria-pressed="false">+ 0</button><button type="button" id="down" aria-pressed="false">− 0</button></span>
+      <button type="button" data-copy="${escape(page)}">Скопировать ссылку</button><button type="button" data-copy="${escape(embed)}">Код для вставки на сайт</button>
+    </div>
     <pre>npx glyphcast play hub:${escape(name)}</pre>`;
+  const count = () => fetch(`${WORKER}/view/${id}`, { method: 'POST' }).then((response) => response.json()).then((stats) => showStats(id, stats)).catch(() => undefined);
+  const player = $('watch').querySelector('glyph-player');
+  // a view counts once playback starts; until then show the current numbers
+  player.addEventListener('play', count, { once: true });
+  fetch(`${WORKER}/stats?ids=${id}`).then((response) => response.json()).then((stats) => showStats(id, stats[id])).catch(() => undefined);
+  fetch(`${WORKER}/mine/${id}`).then((response) => response.json()).then(({ vote }) => showStats(id, { ...(window.lastStats ?? {}), mine: vote, views: Number.parseInt($('views').textContent) || 0, up: Number.parseInt($('up').textContent.slice(2)) || 0, down: Number.parseInt($('down').textContent.slice(2)) || 0 })).catch(() => undefined);
+  const vote = (value) => async () => {
+    const current = $(value === 1 ? 'up' : 'down').getAttribute('aria-pressed') === 'true';
+    const stats = await fetch(`${WORKER}/vote/${id}?value=${current ? 0 : value}`, { method: 'POST' }).then((response) => response.json()).catch(() => null);
+    showStats(id, stats);
+  };
+  $('up').addEventListener('click', vote(1));
+  $('down').addEventListener('click', vote(-1));
   for (const button of $('watch').querySelectorAll('[data-copy]')) {
     button.addEventListener('click', async () => {
       const label = button.textContent;
@@ -223,7 +271,7 @@ const startLive = async (screen) => {
     return;
   }
   try {
-    const { Encoder } = await import('https://cdn.jsdelivr.net/npm/glyphcast@0.19.5/dist/format.js/+esm');
+    const { Encoder } = await import('https://cdn.jsdelivr.net/npm/glyphcast@0.20.0/dist/format.js/+esm');
     const media = screen ? await navigator.mediaDevices.getDisplayMedia({ video: true }) : await navigator.mediaDevices.getUserMedia({ video: true });
     const video = document.createElement('video');
     video.muted = true;
@@ -265,7 +313,7 @@ $('live-stop').addEventListener('click', stopLive);
 try {
   $('key').value = localStorage.getItem('gcast-hub-key') ?? '';
 } catch {}
-const ready = () => ($('send').disabled = !$('file').files?.[0] || !$('title').value.trim() || !$('key').value);
+const ready = () => ($('send').disabled = !$('file').files?.[0] || !$('title').value.trim());
 for (const id of ['file', 'title', 'key']) $(id).addEventListener('input', ready);
 $('file').addEventListener('change', () => {
   const file = $('file').files?.[0];
@@ -273,11 +321,13 @@ $('file').addEventListener('change', () => {
   ready();
 });
 
+let editToken = '';
 const send = (url, body, progress) =>
   new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open('POST', url);
-    request.setRequestHeader('x-hub-key', $('key').value);
+    if ($('key').value) request.setRequestHeader('x-hub-key', $('key').value);
+    if (editToken) request.setRequestHeader('x-edit-token', editToken);
     request.upload.addEventListener('progress', (event) => progress?.(event.loaded / event.total));
     request.addEventListener('load', () => {
       const data = JSON.parse(request.responseText || '{}');
@@ -296,6 +346,8 @@ $('send').addEventListener('click', async () => {
   } catch {}
   const license = $('license').value;
   const query = new URLSearchParams({ title: $('title').value.trim(), license, listed: license === 'own' ? '0' : '1' });
+  if ($('source').value.trim()) query.set('source', $('source').value.trim());
+  editToken = '';
   const bar = document.querySelector('.bar');
   $('send').disabled = true;
   bar.hidden = false;
@@ -307,7 +359,8 @@ $('send').addEventListener('click', async () => {
     let entry;
     if (file.size <= 95 * 1048576) entry = await send(`${WORKER}/upload?${query}`, file, show);
     else {
-      const { id, part } = await send(`${WORKER}/parts/start`, null);
+      const { id, part, token } = await send(`${WORKER}/parts/start`, null);
+      editToken = token ?? '';
       const sizes = [];
       for (let offset = 0, index = 0; offset < file.size; offset += part, index += 1) {
         const piece = file.slice(offset, offset + part);
@@ -317,6 +370,7 @@ $('send').addEventListener('click', async () => {
       query.set('sizes', sizes.join(','));
       entry = await send(`${WORKER}/parts/${id}/finish?${query}`, null);
     }
+    if (entry.token) editToken = entry.token;
     const image = $('poster').files?.[0];
     if (image) await send(`${WORKER}/poster/${entry.id}`, image);
     const captions = $('captions').files?.[0];
@@ -325,8 +379,8 @@ $('send').addEventListener('click', async () => {
       videos = [{ ...entry, poster: Boolean(image), subtitles: Boolean(captions) }, ...videos.filter((video) => video.id !== entry.id)];
       renderList();
     }
-    const link = new URL(`?v=${entry.listed ? entry.slug : entry.id}${entry.listed ? '' : `&t=${encodeURIComponent(entry.title)}`}`, location.href).href;
-    $('status').innerHTML = `Готово: <a href="${link}">${escape(link)}</a>${entry.listed ? '. Видео уже в списке выше; у других посетителей оно появится через минуту.' : ''}`;
+    const link = new URL(`?v=${entry.listed ? entry.slug : entry.id}`, location.href).href;
+    $('status').innerHTML = `Готово: <a href="${link}">${escape(link)}</a>${entry.listed ? '. Видео уже в списке выше; у других посетителей оно появится через минуту.' : entry.review ? '. После проверки видео появится в общем списке.' : ''}`;
   } catch (error) {
     $('status').textContent = `Не получилось: ${error.message}`;
   } finally {

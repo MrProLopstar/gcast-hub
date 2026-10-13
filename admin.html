@@ -25,7 +25,9 @@ table { width: 100%; border-collapse: collapse; min-width: 860px; }
 th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
 th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
 tr:last-child td { border-bottom: 0; }
-td input[type="text"] { width: 100%; min-width: 220px; }
+td input[type="text"], td input[type="url"] { width: 100%; min-width: 220px; box-sizing: border-box; }
+td input[type="url"] { margin-top: 6px; font-size: 12px; }
+.tag.review { color: #ffa657; border-color: #ffa65766; }
 .id { font: 12px var(--mono); color: var(--muted); }
 .tag { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
 .tag.open { color: #7ee787; border-color: #2ea04366; }
@@ -75,13 +77,13 @@ const call = async (path, init = {}) => {
   return data;
 };
 
-const link = (video) => new URL(video.listed ? `./?v=${encodeURIComponent(video.slug)}` : `./?v=${video.id}&t=${encodeURIComponent(video.title || video.id)}`, location.href).href;
+const link = (video) => new URL(video.listed ? `./?v=${encodeURIComponent(video.slug)}` : `./?v=${video.id}`, location.href).href;
 
 const render = (videos) => {
   $('rows').innerHTML = videos
     .map((video) => `<tr data-id="${video.id}">
-      <td><input type="text" value="${escape(video.title)}" placeholder="Без названия"><div class="id">${video.id}</div></td>
-      <td>${video.orphan ? '<span class="tag orphan">без записи</span>' : video.listed ? '<span class="tag open">в списке</span>' : '<span class="tag">по ссылке</span>'}
+      <td><input type="text" data-title value="${escape(video.title)}" placeholder="Без названия"><input type="url" data-source value="${escape(video.source ?? '')}" placeholder="Ссылка на оригинал"><div class="id">${video.id}${video.stats ? ` · ${video.stats.views} просм. · +${video.stats.up} −${video.stats.down}` : ''}</div></td>
+      <td>${video.orphan ? '<span class="tag orphan">без записи</span>' : video.listed ? '<span class="tag open">в списке</span>' : '<span class="tag">по ссылке</span>'}${video.review ? ' <span class="tag review">просит в список</span>' : ''}
         <label class="row"><input type="checkbox" data-listed ${video.listed ? 'checked' : ''}> в списке</label></td>
       <td><select>${LICENSES.map(([value, label]) => `<option value="${value}" ${value === video.license ? 'selected' : ''}>${label}</option>`).join('')}</select></td>
       <td>${clock(video.duration)}</td>
@@ -95,7 +97,7 @@ const render = (videos) => {
       try {
         const saved = await call(`/admin/videos/${video.id}`, {
           method: 'POST',
-          body: JSON.stringify({ title: row.querySelector('input[type="text"]').value, license: row.querySelector('select').value, listed: row.querySelector('[data-listed]').checked }),
+          body: JSON.stringify({ title: row.querySelector('[data-title]').value, source: row.querySelector('[data-source]').value, license: row.querySelector('select').value, listed: row.querySelector('[data-listed]').checked }),
         });
         $('status').textContent = `Сохранено: ${saved.title}. Общий список обновится через минуту.`;
         await load();
@@ -135,7 +137,8 @@ const load = async () => {
   } catch {}
   try {
     const { videos } = await call('/admin/videos');
-    render(videos);
+    // videos waiting for review come first
+    render([...videos].sort((a, b) => Number(Boolean(b.review)) - Number(Boolean(a.review))));
     $('table').hidden = false;
     $('status').textContent = `Видео: ${videos.length}. Открытые видно всем, остальные только по ссылке.`;
   } catch (error) {

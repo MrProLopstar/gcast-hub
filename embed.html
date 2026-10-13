@@ -16,12 +16,13 @@ glyph-player::part(canvas) { object-fit: contain; }
 </head>
 <body>
 <script type="module">
-import 'https://cdn.jsdelivr.net/npm/glyphcast@0.19.5/dist/element.js/+esm';
+import 'https://cdn.jsdelivr.net/npm/glyphcast@0.20.0/dist/element.js/+esm';
 
 const key = new URLSearchParams(location.search).get('v') ?? '';
 const [config, videos] = await Promise.all([fetch('./hub.json').then((response) => response.json()), fetch('./videos.json', { cache: 'no-cache' }).then((response) => response.json()).catch(() => [])]);
-const video = videos.find((item) => item.slug === key || item.id === key);
+let video = videos.find((item) => item.slug === key || item.id === key);
 const id = video?.id ?? key;
+if (!video && /^[w-]{11}$/.test(id)) video = await fetch(`${config.files}/meta/${id}`).then((response) => (response.ok ? response.json() : undefined)).catch(() => undefined);
 if (!/^[\w-]{11}$/.test(id)) {
   document.body.innerHTML = '<div class="missing">Видео не найдено</div>';
 } else {
@@ -31,10 +32,13 @@ if (!/^[\w-]{11}$/.test(id)) {
   if (video?.poster) player.setAttribute('poster', `${config.files}/v/${id}.jpg`);
   if (video?.subtitles) player.setAttribute('subtitles', `${config.files}/v/${id}.vtt`);
   player.setAttribute('mode', 'braille');
+  if (video?.title) player.setAttribute('heading', video.title);
+  if (video?.source) player.setAttribute('source', video.source);
+  player.addEventListener('play', () => fetch(`${config.files}/view/${id}`, { method: 'POST' }).catch(() => undefined), { once: true });
   player.setAttribute('fullsize', '');
   const brand = document.createElement('a');
   brand.className = 'brand';
-  brand.href = new URL(`./?v=${encodeURIComponent(video?.slug ?? id)}`, location.href).href;
+  brand.href = new URL(`./?v=${encodeURIComponent(video?.listed ? video.slug : id)}`, location.href).href;
   brand.target = '_blank';
   brand.rel = 'noopener';
   brand.textContent = 'gcast hub';
