@@ -30,7 +30,7 @@ export interface Stats {
 }
 
 export const LICENSES: readonly (readonly [string, string])[] = [
-  ['own', 'Только по ссылке'],
+  ['own', 'Все права у автора'],
   ['CC0', 'CC0'],
   ['CC-BY', 'CC BY'],
   ['CC-BY-SA', 'CC BY-SA'],
