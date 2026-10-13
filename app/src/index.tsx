@@ -157,7 +157,8 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
   if (video === undefined) return <main className="empty">Загружаю…</main>;
   if (video === null) return <main className="empty">Такого видео нет.</main>;
   const name = video.id;
-  const page = new URL(`?v=${encodeURIComponent(name)}`, location.href).href;
+  // the share link goes through the worker, so messengers show this video's title and poster
+  const page = `${files}/w/${video.id}`;
   const embed = `<iframe src="${new URL(`embed.html?v=${encodeURIComponent(name)}`, location.href).href}" width="800" height="450" allow="fullscreen; picture-in-picture; autoplay" style="border:0;border-radius:12px"></iframe>`;
   const copy = (text: string, what: string) => () => void navigator.clipboard.writeText(text).then(() => {
     setCopied(what);

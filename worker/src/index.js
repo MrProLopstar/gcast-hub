@@ -576,6 +576,45 @@ const meta = async (env, id) => {
   return listed ? json(listed) : json({ error: 'No such video' }, 404);
 };
 
+const HUB_SITE = 'https://glc-hub.1lop.ru';
+
+const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+
+const minutes = (seconds) => {
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const rest = `${String(Math.floor((total % 3600) / 60)).padStart(hours ? 2 : 1, '0')}:${String(total % 60).padStart(2, '0')}`;
+  return hours ? `${hours}:${rest}` : rest;
+};
+
+/**
+ * A share link with the video's own preview: messengers and social sites read the title, description and poster
+ * from these tags (they do not run the hub's scripts), people are sent on to the watch page at once.
+ */
+const sharePage = async (request, env, id) => {
+  const unlisted = await hidden(env).fetch(`https://index/get?id=${id}`);
+  const video = unlisted.ok ? visible(await unlisted.json()) : (await readCatalog(env)).find((item) => item.id === id);
+  const target = `${HUB_SITE}/?v=${id}`;
+  if (!video) return Response.redirect(target, 302);
+  const origin = new URL(request.url).origin;
+  const description = (video.description?.trim() || `Смотрите «${video.title}» цветными символами: в браузере и прямо в терминале. ${minutes(video.duration)}`).slice(0, 300);
+  const image = video.poster ? `${origin}/v/${id}.jpg` : `${HUB_SITE}/preview.jpg`;
+  const html = `<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>${escapeHtml(video.title)} · gcast hub</title>
+<meta name="description" content="${escapeHtml(description)}">
+<meta property="og:site_name" content="gcast hub">
+<meta property="og:type" content="video.other">
+<meta property="og:title" content="${escapeHtml(video.title)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+<meta property="og:image" content="${escapeHtml(image)}">
+<meta property="og:url" content="${escapeHtml(target)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta http-equiv="refresh" content="0; url=${escapeHtml(target)}">
+<link rel="canonical" href="${escapeHtml(target)}">
+</head><body><script>location.replace(${JSON.stringify(target)})</script><a href="${escapeHtml(target)}">${escapeHtml(video.title)}</a></body></html>`;
+  return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
+};
+
 const TYPES = { jpg: 'image/jpeg', vtt: 'text/vtt; charset=utf-8', gcast: 'application/octet-stream' };
 
 const BLOCK = 4 * 1048576;
@@ -764,6 +803,8 @@ export default {
         for (const entry of unlisted) await keepHidden(env, entry);
         return json({ ok: true, listed: list.length, unlisted: unlisted.length });
       }
+      const share = /^\/w\/([\w-]{11})$/.exec(url.pathname);
+      if (share && request.method === 'GET') return sharePage(request, env, share[1]);
       const about = /^\/meta\/([\w-]{11})$/.exec(url.pathname);
       if (about && request.method === 'GET') return meta(env, about[1]);
       if (url.pathname === '/stats' && request.method === 'GET') return json(await hidden(env).fetch(`https://index/stats?ids=${encodeURIComponent(url.searchParams.get('ids') ?? '')}`).then((response) => response.json()));
