@@ -305,7 +305,7 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
         </div>
         {share !== null && (
           <div className="progress" aria-label="Загрузка">
-            <div style={{ width: `${(share * 100).toFixed(1)}%` }} />
+            <div style={{ transform: `scaleX(${share.toFixed(3)})` }} />
           </div>
         )}
         {status && <p className={status.startsWith('Не') ? 'error' : 'note'}>{status}</p>}
