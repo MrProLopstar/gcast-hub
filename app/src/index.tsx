@@ -126,17 +126,23 @@ const Home = ({ videos, files, query }: { videos: Video[]; files: string; query:
   );
 };
 
-const Watch = ({ key$, videos, files }: { key$: string; videos: Video[]; files: string }) => {
+const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[]; files: string; loaded: boolean }) => {
   const listed = videos.find((video) => video.slug === key$ || video.id === key$);
   const [video, setVideo] = useState<Video | null | undefined>(listed);
   const [stat, setStat] = useState<Stats>({ views: 0, up: 0, down: 0 });
   const [mine, setMine] = useState(0);
   const [copied, setCopied] = useState('');
   useEffect(() => {
+    // unlisted videos are asked for by id, but only once the open list has arrived without them
+    let current = true;
     if (listed) setVideo(listed);
-    else if (/^[\w-]{11}$/.test(key$)) void meta(key$).then(setVideo);
+    else if (!loaded) setVideo(undefined);
+    else if (/^[\w-]{11}$/.test(key$)) void meta(key$).then((found) => current && setVideo(found));
     else setVideo(null);
-  }, [key$, listed]);
+    return () => {
+      current = false;
+    };
+  }, [key$, listed, loaded]);
   useEffect(() => {
     if (!video) return;
     document.title = `${video.title} · gcast hub`;
@@ -326,6 +332,7 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
 const App = () => {
   const [route, setRoute] = useState<Route>(readRoute);
   const [videos, setVideos] = useState<Video[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [files, setFiles] = useState('');
   const [dialog, setDialog] = useState<'upload' | 'live' | null>(null);
   const [text, setText] = useState(route.page === 'home' ? route.query : '');
@@ -333,7 +340,10 @@ const App = () => {
     const update = () => setRoute(readRoute());
     addEventListener('popstate', update);
     void worker().then(setFiles);
-    void catalog().then(setVideos).catch(() => setVideos([]));
+    void catalog()
+      .then(setVideos)
+      .catch(() => setVideos([]))
+      .finally(() => setLoaded(true));
     return () => removeEventListener('popstate', update);
   }, []);
   useEffect(() => {
@@ -377,7 +387,7 @@ const App = () => {
         </nav>
       </header>
       {files && route.page === 'home' && <Home videos={videos} files={files} query={route.query} />}
-      {files && route.page === 'watch' && <Watch key$={route.key} videos={videos} files={files} />}
+      {files && route.page === 'watch' && <Watch key$={route.key} videos={videos} files={files} loaded={loaded} />}
       {files && route.page === 'live' && <LiveWatch room={route.room} files={files} />}
       {dialog === 'upload' && (
         <Upload

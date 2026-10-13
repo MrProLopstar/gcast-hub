@@ -61,3 +61,10 @@
   .item .buttons { grid-auto-flow: row; }
   .find { min-width: 0; width: 100%; }
 }
+
+.item .poster { border: 0; padding: 0; cursor: pointer; }
+.item .poster .play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 26px; background: rgba(0, 0, 0, 0.35); opacity: 0; transition: opacity 0.15s; }
+.item .poster:hover .play, .item .poster:focus-visible .play { opacity: 1; }
+.pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.facts a.mono:hover { color: var(--accent); }
+.panel.preview { width: min(1100px, 100%); }

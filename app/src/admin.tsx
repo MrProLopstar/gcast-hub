@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { call, clock, fileUrl, megabytes, worker, LICENSES, type Credentials, type Video } from './api';
 import './hub.css';
 import './admin.css';
+import { Player } from './Player';
+import { sources } from './api';
 
 /** What each license lets people do, in plain words, shown next to the choice. */
 const ABOUT: Record<string, string> = {
@@ -23,7 +25,7 @@ const FILTERS: [Filter, string][] = [
 ];
 const PAGE = 40;
 
-const Item = ({ video, files, who, reload, say }: { video: Video; files: string; who: Credentials; reload: () => void; say: (text: string) => void }) => {
+const Item = ({ video, files, who, reload, say, watch }: { video: Video; files: string; who: Credentials; reload: () => void; say: (text: string) => void; watch: (video: Video) => void }) => {
   const [title, setTitle] = useState(video.title);
   const [source, setSource] = useState(video.source ?? '');
   const [license, setLicense] = useState(video.license);
@@ -63,22 +65,26 @@ const Item = ({ video, files, who, reload, say }: { video: Video; files: string;
   const open = license !== 'own';
   return (
     <article className={`item${video.review ? ' waiting' : ''}`}>
-      <a className="poster" href={link} target="_blank" rel="noopener" aria-label="Открыть видео">
+      <button type="button" className="poster" aria-label="Предпросмотр" onClick={() => watch(video)}>
         {video.poster ? <img loading="lazy" alt="" src={fileUrl(files, video, 'jpg')} /> : <span>⣿⡇⠶</span>}
         <time>{clock(video.duration)}</time>
-      </a>
+        <span className="play" aria-hidden="true">▶</span>
+      </button>
       <div className="fields">
         <input className="title" value={title} placeholder="Без названия" aria-label="Название" onChange={(event) => setTitle(event.target.value)} />
         <input value={source} placeholder="Ссылка на оригинал" aria-label="Ссылка на оригинал" onChange={(event) => setSource(event.target.value)} />
         <div className="facts">
           {video.orphan ? <span className="pill warn">без записи</span> : video.listed ? <span className="pill good">в списке</span> : <span className="pill">по ссылке</span>}
           {video.review && <span className="pill warn">просит в список</span>}
+          {!video.orphan && !video.files && <span className="pill bad">нет файла</span>}
           <span>{megabytes(video.files || video.size || 0)}</span>
           <span>
             {video.cols}×{video.rows}
           </span>
           <span>{video.added}</span>
-          <span className="mono">{video.id}</span>
+          <a className="mono" href={link} target="_blank" rel="noopener">
+            {video.id} ↗
+          </a>
         </div>
       </div>
       <div className="license">
@@ -133,6 +139,7 @@ const Admin = () => {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [legend, setLegend] = useState(false);
+  const [watching, setWatching] = useState<Video | null>(null);
   const who: Credentials = { key };
   const load = async () => {
     try {
@@ -270,7 +277,7 @@ const Admin = () => {
         <div className="items">
           {shown.length === 0 && <p className="empty">Ничего не нашлось.</p>}
           {shown.slice(page * PAGE, (page + 1) * PAGE).map((video) => (
-            <Item key={`${video.id}-${video.title}-${video.listed}-${video.license}-${video.source ?? ''}`} video={video} files={files} who={who} reload={() => void load()} say={setStatus} />
+            <Item key={`${video.id}-${video.title}-${video.listed}-${video.license}-${video.source ?? ''}`} video={video} files={files} who={who} reload={() => void load()} say={setStatus} watch={setWatching} />
           ))}
         </div>
         {pages > 1 && (
@@ -287,6 +294,26 @@ const Admin = () => {
           </div>
         )}
       </main>
+      {watching && (
+        <div className="dialog" role="dialog" aria-modal="true" aria-label="Предпросмотр" onClick={(event) => event.target === event.currentTarget && setWatching(null)}>
+          <div className="panel preview">
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <h2>{watching.title || watching.id}</h2>
+              <button type="button" className="button ghost" onClick={() => setWatching(null)}>
+                Закрыть
+              </button>
+            </div>
+            <Player
+              src={fileUrl(files, watching, 'gcast')}
+              sources={sources(files, watching)}
+              poster={watching.poster ? fileUrl(files, watching, 'jpg') : undefined}
+              subtitles={watching.subtitles ? fileUrl(files, watching, 'vtt') : undefined}
+              heading={watching.title}
+              source={watching.source}
+            />
+          </div>
+        </div>
+      )}
     </>
   );
 };
