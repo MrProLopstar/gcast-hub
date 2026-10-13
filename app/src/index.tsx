@@ -32,11 +32,11 @@ const go = (search: string): void => {
 const Card = ({ video, files, stat }: { video: Video; files: string; stat?: Stats }) => (
   <a
     className="card"
-    href={`?v=${encodeURIComponent(video.listed ? video.slug : video.id)}`}
+    href={`?v=${encodeURIComponent(video.id)}`}
     onClick={(event) => {
       if (event.metaKey || event.ctrlKey) return;
       event.preventDefault();
-      go(`?v=${encodeURIComponent(video.listed ? video.slug : video.id)}`);
+      go(`?v=${encodeURIComponent(video.id)}`);
     }}
   >
     <div className="thumb">
@@ -146,6 +146,8 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
   useEffect(() => {
     if (!video) return;
     document.title = `${video.title} · gcast hub`;
+    // old links by name still open; the address bar then shows the video's code
+    if (key$ !== video.id) history.replaceState(null, '', `?v=${video.id}`);
     void stats([video.id]).then((found) => found[video.id] && setStat(found[video.id]!)).catch(() => undefined);
     void myVote(video.id).then(setMine).catch(() => undefined);
   }, [video?.id]);
@@ -154,7 +156,7 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
   }, [video?.id]);
   if (video === undefined) return <main className="empty">Загружаю…</main>;
   if (video === null) return <main className="empty">Такого видео нет.</main>;
-  const name = video.listed ? video.slug : video.id;
+  const name = video.id;
   const page = new URL(`?v=${encodeURIComponent(name)}`, location.href).href;
   const embed = `<iframe src="${new URL(`embed.html?v=${encodeURIComponent(name)}`, location.href).href}" width="800" height="450" allow="fullscreen; picture-in-picture; autoplay" style="border:0;border-radius:12px"></iframe>`;
   const copy = (text: string, what: string) => () => void navigator.clipboard.writeText(text).then(() => {

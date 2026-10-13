@@ -62,7 +62,7 @@ const Item = ({ video, files, who, reload, say, watch }: { video: Video; files: 
       setBusy(false);
     }
   };
-  const link = new URL(`./?v=${encodeURIComponent(video.listed ? video.slug : video.id)}`, location.href).href;
+  const link = new URL(`./?v=${encodeURIComponent(video.id)}`, location.href).href;
   return (
     <article className={`item${video.review ? ' waiting' : ''}`}>
       <button type="button" className="poster" aria-label="Предпросмотр" onClick={() => watch(video)}>

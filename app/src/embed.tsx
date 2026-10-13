@@ -40,7 +40,7 @@ const Embed = () => {
         fullsize=""
         onPlay={() => void view(video.id).catch(() => undefined)}
       />
-      <a className="brand" href={new URL(`./?v=${encodeURIComponent(video.listed ? video.slug : video.id)}`, location.href).href} target="_blank" rel="noopener">
+      <a className="brand" href={new URL(`./?v=${encodeURIComponent(video.id)}`, location.href).href} target="_blank" rel="noopener">
         gcast hub
       </a>
     </>
