@@ -1,4 +1,4 @@
-import{c as u,j as t,r,w as p,d as h,e as g,v as m,f as a,s as f}from"./api-L9xtykqk.js";import{P as x}from"./Player-BrTjGMDy.js";const c=document.createElement("style");c.textContent=`html, body, #root { margin: 0; height: 100%; background: #000; color: #e8ecef; font: 13px "Onest", system-ui, sans-serif; overflow: hidden; }
+import{c as u,j as t,r,w as p,d as h,e as g,v as m,f as a,s as f}from"./api-L9xtykqk.js";import{P as x}from"./Player-D19yoddB.js";const c=document.createElement("style");c.textContent=`html, body, #root { margin: 0; height: 100%; background: #000; color: #e8ecef; font: 13px "Onest", system-ui, sans-serif; overflow: hidden; }
 glyph-player { position: absolute; inset: 0; --radius: 0; }
 .brand { position: absolute; top: 10px; right: 12px; z-index: 1; padding: 3px 8px; border-radius: 6px; background: rgba(12, 15, 20, 0.8); color: #f0a04b; text-decoration: none; font: 700 12px "JetBrains Mono", monospace; opacity: 0.85; }
 .brand:hover { opacity: 1; }

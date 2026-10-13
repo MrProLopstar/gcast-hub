@@ -1,23 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { call, clock, licenseName, megabytes, LICENSES, type Credentials, type Video } from './api';
+import { call, clock, fileUrl, megabytes, worker, LICENSES, type Credentials, type Video } from './api';
 import './hub.css';
+import './admin.css';
 
-const style = document.createElement('style');
-style.textContent = `.admin { max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
-.admin table { width: 100%; border-collapse: collapse; font-size: 14px; }
-.admin th, .admin td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-.admin th { font-size: 12px; color: var(--muted); font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
-.admin td input, .admin td select { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); }
-.admin td input + input { margin-top: 6px; font-size: 12px; }
-.admin .id { font: 12px var(--mono); color: var(--muted); margin-top: 4px; }
-.admin .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
-.admin .tag.open { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
-.admin .tag.review { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
-.admin .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
-.admin .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.admin .pages { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }`;
-document.head.append(style);
+/** What each license lets people do, in plain words, shown next to the choice. */
+const ABOUT: Record<string, string> = {
+  own: 'Все права у автора. Видео не попадает в общий список, открывается только по ссылке. Подходит для своих роликов и всего, что нельзя раздавать открыто.',
+  CC0: 'Автор отказался от всех прав: можно копировать, менять и использовать как угодно, даже без указания автора.',
+  'CC-BY': 'Можно копировать, менять и использовать, в том числе в коммерции, если указан автор. Так лицензированы фильмы Blender.',
+  'CC-BY-SA': 'Как CC BY, но изменённые версии нужно выпускать под той же лицензией.',
+  'CC-BY-NC': 'Можно копировать и менять с указанием автора, но только некоммерчески.',
+  'public-domain': 'Срок охраны истёк или права не возникали (старые фильмы, госматериалы некоторых стран): свободно для всех.',
+};
 
 type Filter = 'all' | 'review' | 'open' | 'link';
 const FILTERS: [Filter, string][] = [
@@ -26,21 +21,26 @@ const FILTERS: [Filter, string][] = [
   ['open', 'В списке'],
   ['link', 'По ссылке'],
 ];
-const PAGE = 50;
+const PAGE = 40;
 
-const Row = ({ video, who, reload, say }: { video: Video; who: Credentials; reload: () => void; say: (text: string) => void }) => {
+const Item = ({ video, files, who, reload, say }: { video: Video; files: string; who: Credentials; reload: () => void; say: (text: string) => void }) => {
   const [title, setTitle] = useState(video.title);
   const [source, setSource] = useState(video.source ?? '');
   const [license, setLicense] = useState(video.license);
   const [listed, setListed] = useState(video.listed);
   const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const changed = title !== video.title || source !== (video.source ?? '') || license !== video.license || listed !== video.listed;
   const save = async (override?: Partial<{ listed: boolean }>) => {
+    setBusy(true);
     try {
       const saved = await call<Video>(`/admin/videos/${video.id}`, who, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, source, license, listed, ...override }) });
-      say(`Сохранено: ${saved.title}`);
+      say(`Сохранено: «${saved.title}»`);
       reload();
     } catch (error) {
       say(`Не сохранилось: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
     }
   };
   const remove = async () => {
@@ -49,71 +49,72 @@ const Row = ({ video, who, reload, say }: { video: Video; who: Credentials; relo
       setTimeout(() => setArmed(false), 3000);
       return;
     }
+    setBusy(true);
     try {
       await call(`/admin/videos/${video.id}/delete`, who, { method: 'POST' });
-      say('Удалено.');
+      say(`Удалено: «${video.title || video.id}»`);
       reload();
     } catch (error) {
       say(`Не удалилось: ${error instanceof Error ? error.message : String(error)}`);
+      setBusy(false);
     }
   };
   const link = new URL(`./?v=${encodeURIComponent(video.listed ? video.slug : video.id)}`, location.href).href;
+  const open = license !== 'own';
   return (
-    <tr>
-      <td style={{ minWidth: 260 }}>
-        <input value={title} placeholder="Без названия" onChange={(event) => setTitle(event.target.value)} />
-        <input value={source} placeholder="Ссылка на оригинал" onChange={(event) => setSource(event.target.value)} />
-        <div className="id">
-          <a href={link} target="_blank" rel="noopener">
-            {video.id}
-          </a>
+    <article className={`item${video.review ? ' waiting' : ''}`}>
+      <a className="poster" href={link} target="_blank" rel="noopener" aria-label="Открыть видео">
+        {video.poster ? <img loading="lazy" alt="" src={fileUrl(files, video, 'jpg')} /> : <span>⣿⡇⠶</span>}
+        <time>{clock(video.duration)}</time>
+      </a>
+      <div className="fields">
+        <input className="title" value={title} placeholder="Без названия" aria-label="Название" onChange={(event) => setTitle(event.target.value)} />
+        <input value={source} placeholder="Ссылка на оригинал" aria-label="Ссылка на оригинал" onChange={(event) => setSource(event.target.value)} />
+        <div className="facts">
+          {video.orphan ? <span className="pill warn">без записи</span> : video.listed ? <span className="pill good">в списке</span> : <span className="pill">по ссылке</span>}
+          {video.review && <span className="pill warn">просит в список</span>}
+          <span>{megabytes(video.files || video.size || 0)}</span>
+          <span>
+            {video.cols}×{video.rows}
+          </span>
+          <span>{video.added}</span>
+          <span className="mono">{video.id}</span>
         </div>
-      </td>
-      <td>
-        {video.orphan ? <span className="tag review">без записи</span> : video.listed ? <span className="tag open">в списке</span> : <span className="tag">по ссылке</span>}
-        {video.review && (
-          <>
-            {' '}
-            <span className="tag review">просит в список</span>
-          </>
-        )}
-        <label className="row" style={{ marginTop: 8, fontSize: 13 }}>
-          <input type="checkbox" style={{ width: 'auto' }} checked={listed} onChange={(event) => setListed(event.target.checked)} /> в списке
-        </label>
-      </td>
-      <td style={{ minWidth: 150 }}>
-        <select value={license} onChange={(event) => setLicense(event.target.value)}>
+      </div>
+      <div className="license">
+        <select value={license} aria-label="Лицензия" onChange={(event) => setLicense(event.target.value)}>
           {LICENSES.map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
         </select>
-      </td>
-      <td className="num">
-        {clock(video.duration)}
-        <div className="meta">{megabytes(video.files || video.size || 0)}</div>
-      </td>
-      <td className="num">
-        {video.stats ? `${video.stats.views} просм.` : '—'}
-        {video.stats && <div className="meta">+{video.stats.up} −{video.stats.down}</div>}
-      </td>
-      <td>
-        <div className="row">
-          {video.review && (
-            <button type="button" className="button primary" onClick={() => void save({ listed: true })}>
-              Одобрить
-            </button>
-          )}
-          <button type="button" className="button" onClick={() => void save()}>
-            Сохранить
+        <p>{ABOUT[license]}</p>
+        <label className={`switch${open ? '' : ' off'}`} title={open ? '' : 'В общий список попадают только видео со свободной лицензией'}>
+          <input type="checkbox" checked={listed && open} disabled={!open} onChange={(event) => setListed(event.target.checked)} /> показывать в общем списке
+        </label>
+      </div>
+      <div className="numbers">
+        <strong>{video.stats?.views ?? 0}</strong>
+        <span>просмотров</span>
+        <span className="votes-line">
+          <b className="up">+{video.stats?.up ?? 0}</b> <b className="down">−{video.stats?.down ?? 0}</b>
+        </span>
+      </div>
+      <div className="buttons">
+        {video.review && open && (
+          <button type="button" className="button primary" disabled={busy} onClick={() => void save({ listed: true })}>
+            Одобрить
           </button>
-          <button type="button" className="button ghost" style={{ color: 'var(--danger)' }} onClick={() => void remove()}>
-            {armed ? 'Точно?' : 'Удалить'}
-          </button>
-        </div>
-      </td>
-    </tr>
+        )}
+        <button type="button" className="button" disabled={busy || !changed} onClick={() => void save()}>
+          Сохранить
+        </button>
+        <button type="button" className={`button ghost danger${armed ? ' armed' : ''}`} disabled={busy} onClick={() => void remove()}>
+          {armed ? 'Точно удалить?' : 'Удалить'}
+        </button>
+      </div>
+    </article>
   );
 };
 
@@ -125,11 +126,13 @@ const Admin = () => {
       return '';
     }
   });
+  const [files, setFiles] = useState('');
   const [videos, setVideos] = useState<Video[] | null>(null);
   const [status, setStatus] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
+  const [legend, setLegend] = useState(false);
   const who: Credentials = { key };
   const load = async () => {
     try {
@@ -138,12 +141,15 @@ const Admin = () => {
     try {
       const { videos: list } = await call<{ videos: Video[] }>('/admin/videos', who);
       setVideos(list);
+      setStatus('');
     } catch (error) {
       setVideos(null);
-      setStatus(`Не получилось: ${error instanceof Error ? error.message : String(error)}`);
+      setStatus(error instanceof Error && error.message.includes('key') ? 'Ключ не подошёл.' : `Не получилось: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
   useEffect(() => {
+    document.title = 'Админка · gcast hub';
+    void worker().then(setFiles);
     if (key) void load();
   }, []);
   const shown = useMemo(() => {
@@ -155,7 +161,40 @@ const Admin = () => {
   }, [videos, filter, query]);
   useEffect(() => setPage(0), [filter, query]);
   const pages = Math.max(1, Math.ceil(shown.length / PAGE));
-  const waiting = (videos ?? []).filter((video) => video.review).length;
+  const all = videos ?? [];
+  const totals = {
+    count: all.length,
+    review: all.filter((video) => video.review).length,
+    open: all.filter((video) => video.listed).length,
+    views: all.reduce((sum, video) => sum + (video.stats?.views ?? 0), 0),
+    size: all.reduce((sum, video) => sum + (video.files || video.size || 0), 0),
+  };
+  if (!videos)
+    return (
+      <div className="login">
+        <form
+          className="panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void load();
+          }}
+        >
+          <a className="logo" href="./">
+            gcast<b>hub</b>
+          </a>
+          <h2>Вход в админку</h2>
+          <label className="field">
+            Ключ хаба
+            <input type="password" autoComplete="current-password" value={key} onChange={(event) => setKey(event.target.value)} autoFocus />
+          </label>
+          {status && <p className="error">{status}</p>}
+          <button type="submit" className="button primary" disabled={!key}>
+            Войти
+          </button>
+          <p className="note">Ключ — это секрет HUB_KEY воркера. Он хранится только в этом браузере.</p>
+        </form>
+      </div>
+    );
   return (
     <>
       <header className="top">
@@ -163,59 +202,89 @@ const Admin = () => {
           gcast<b>hub</b>
         </a>
         <span className="meta">админка</span>
+        <nav className="actions" style={{ marginLeft: 'auto' }}>
+          <button type="button" className="button" aria-expanded={legend} onClick={() => setLegend(!legend)}>
+            Лицензии
+          </button>
+          <button
+            type="button"
+            className="button ghost"
+            onClick={() => {
+              try {
+                localStorage.removeItem('gcast-hub-key');
+              } catch {}
+              setKey('');
+              setVideos(null);
+            }}
+          >
+            Выйти
+          </button>
+        </nav>
       </header>
       <main className="admin">
-        <div className="row">
-          <input type="password" className="field" style={{ padding: '9px 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', minWidth: 280 }} placeholder="Ключ хаба" value={key} onChange={(event) => setKey(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && void load()} />
-          <button type="button" className="button primary" onClick={() => void load()}>
-            Войти
-          </button>
-          {status && <span className={status.startsWith('Не') ? 'error' : 'note'}>{status}</span>}
-        </div>
-        {videos && (
-          <>
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <div className="chips" style={{ margin: 0 }}>
-                {FILTERS.map(([value, label]) => (
-                  <button key={value} type="button" className="chip" aria-pressed={filter === value} onClick={() => setFilter(value)}>
-                    {label}
-                    {value === 'review' && waiting ? ` · ${waiting}` : ''}
-                  </button>
-                ))}
+        <section className="totals" aria-label="Итоги">
+          <div>
+            <strong>{totals.count}</strong>
+            <span>видео</span>
+          </div>
+          <div className={totals.review ? 'attention' : ''}>
+            <strong>{totals.review}</strong>
+            <span>ждут проверки</span>
+          </div>
+          <div>
+            <strong>{totals.open}</strong>
+            <span>в общем списке</span>
+          </div>
+          <div>
+            <strong>{totals.views}</strong>
+            <span>просмотров</span>
+          </div>
+          <div>
+            <strong>{megabytes(totals.size)}</strong>
+            <span>на Диске</span>
+          </div>
+        </section>
+        {legend && (
+          <section className="legend" aria-label="Что значат лицензии">
+            {LICENSES.map(([value, label]) => (
+              <div key={value}>
+                <strong>{label}</strong>
+                <p>{ABOUT[value]}</p>
               </div>
-              <input type="search" placeholder="Название или id" value={query} onChange={(event) => setQuery(event.target.value)} style={{ padding: '8px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface)', minWidth: 240 }} />
-            </div>
-            <div className="wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Название</th>
-                    <th>Доступ</th>
-                    <th>Лицензия</th>
-                    <th>Длина</th>
-                    <th>Статистика</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.slice(page * PAGE, (page + 1) * PAGE).map((video) => (
-                    <Row key={`${video.id}-${video.title}-${video.listed}`} video={video} who={who} reload={() => void load()} say={setStatus} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="pages">
-              <span className="meta">
-                {shown.length} видео · {licenseName('own') && ''}страница {page + 1} из {pages}
-              </span>
-              <button type="button" className="button" disabled={page === 0} onClick={() => setPage(page - 1)}>
-                Назад
+            ))}
+            <p className="note">В общий список можно поставить только видео со свободной лицензией. Если сомневаетесь в правах на ролик, оставьте «Только по ссылке».</p>
+          </section>
+        )}
+        <div className="toolbar">
+          <div className="chips">
+            {FILTERS.map(([value, label]) => (
+              <button key={value} type="button" className="chip" aria-pressed={filter === value} onClick={() => setFilter(value)}>
+                {label}
+                {value === 'review' && totals.review ? ` · ${totals.review}` : ''}
               </button>
-              <button type="button" className="button" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>
-                Дальше
-              </button>
-            </div>
-          </>
+            ))}
+          </div>
+          <input type="search" className="find" placeholder="Название или id" value={query} onChange={(event) => setQuery(event.target.value)} />
+        </div>
+        {status && <p className={status.startsWith('Не') ? 'error' : 'note'}>{status}</p>}
+        <div className="items">
+          {shown.length === 0 && <p className="empty">Ничего не нашлось.</p>}
+          {shown.slice(page * PAGE, (page + 1) * PAGE).map((video) => (
+            <Item key={`${video.id}-${video.title}-${video.listed}-${video.license}-${video.source ?? ''}`} video={video} files={files} who={who} reload={() => void load()} say={setStatus} />
+          ))}
+        </div>
+        {pages > 1 && (
+          <div className="pages">
+            <button type="button" className="button" disabled={page === 0} onClick={() => setPage(page - 1)}>
+              Назад
+            </button>
+            <span className="meta">
+              {page + 1} из {pages}
+            </span>
+            <button type="button" className="button" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>
+              Дальше
+            </button>
+          </div>
         )}
       </main>
     </>
