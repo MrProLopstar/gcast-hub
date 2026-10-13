@@ -549,7 +549,7 @@ export class GlyphPlayerElement extends HTMLElement {
                 this.updateRatio();
             }));
         }
-        parts.push(chips('Отрисовка', MODES, look.mode ?? 'glyphs', (value) => player.configure({ mode: value })), chips('Символы', GLYPH_SETS, look.glyphs, (value) => player.configure({ glyphs: String(value) })), chips('Цвет', TINTS, look.tint ?? null, (value) => player.configure({ tint: value ?? null })));
+        parts.push(chips('Отрисовка', MODES, look.mode ?? 'braille', (value) => player.configure({ mode: value })), chips('Символы', GLYPH_SETS, look.glyphs, (value) => player.configure({ glyphs: String(value) })), chips('Цвет', TINTS, look.tint ?? null, (value) => player.configure({ tint: value ?? null })));
         const range = (title, min, max, value, change) => {
             const wrap = document.createElement('div');
             wrap.innerHTML = `<h4>${title}</h4><div class="line"><input type="range" min="${min}" max="${max}" step="0.05" value="${value}"><output>${value.toFixed(2)}</output></div>`;

@@ -43,7 +43,7 @@ export class GlyphPlayer extends EventTarget {
             tint: options.tint ?? null,
             autoLevels: options.autoLevels ?? true,
             background: options.background ?? '#05070a',
-            mode: options.mode ?? 'glyphs',
+            mode: options.mode ?? 'braille',
             edges: options.edges ?? false,
             crt: options.crt ?? false,
             fill: options.fill ?? 0.25,
