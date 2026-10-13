@@ -4,49 +4,96 @@ const CORS = {
   'access-control-allow-methods': 'GET, HEAD, POST, OPTIONS',
   'access-control-expose-headers': 'content-range, content-length, accept-ranges',
 };
-const TAG = 'videos';
 const LICENSES = ['CC0', 'CC-BY', 'CC-BY-SA', 'CC-BY-NC', 'public-domain', 'own'];
 const ALPHABET = '0123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ_-';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, 'content-type': 'application/json; charset=utf-8' } });
 
-const github = (env, path, init = {}) =>
-  fetch(path.startsWith('https://') ? path : `https://api.github.com/repos/${env.REPO}${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json', 'user-agent': 'gcast-hub', ...init.headers },
-  });
+let access = { token: '', until: 0 };
 
-const release = async (env) => {
-  const found = await github(env, `/releases/tags/${TAG}`);
-  if (found.ok) return found.json();
-  const created = await github(env, '/releases', { method: 'POST', body: JSON.stringify({ tag_name: TAG, name: 'Videos', body: 'Files of the gcast hub. Watch them at the hub site.' }) });
-  if (!created.ok) throw new Error(`Cannot create the release: ${created.status}`);
-  return created.json();
+/** An access token for Drive from the refresh token in the worker secrets, reused until it expires. */
+const driveToken = async (env) => {
+  if (access.until > Date.now() + 60000) return access.token;
+  const answer = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    body: new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, refresh_token: env.GOOGLE_REFRESH_TOKEN, grant_type: 'refresh_token' }),
+  }).then((response) => response.json());
+  if (!answer.access_token) throw new Error(`Google Drive refused the worker: ${answer.error ?? 'no token'}`);
+  access = { token: answer.access_token, until: Date.now() + (answer.expires_in ?? 3600) * 1000 };
+  return access.token;
+};
+
+const drive = async (env, path, init = {}) =>
+  fetch(path.startsWith('https://') ? path : `https://www.googleapis.com${path}`, { ...init, headers: { authorization: `Bearer ${await driveToken(env)}`, ...init.headers } });
+
+/** Drive file id for a name in the hub folder, remembered in the index. */
+const fileId = async (env, name) => {
+  const known = await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(name)}`).then((response) => response.json());
+  if (known?.id) return known.id;
+  const query = `name = '${name.replace(/'/g, "\\'")}' and '${env.DRIVE_FOLDER}' in parents and trashed = false`;
+  const found = await drive(env, `/drive/v3/files?${new URLSearchParams({ q: query, fields: 'files(id,size)' })}`).then((response) => response.json());
+  const file = found.files?.[0];
+  if (file) await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(name)}`, { method: 'POST', body: JSON.stringify({ id: file.id, size: Number(file.size ?? 0) }) });
+  return file?.id ?? null;
+};
+
+/** Starts a resumable Drive upload and returns its session URL. */
+const session = async (env, name, type, size) => {
+  const response = await drive(env, '/upload/drive/v3/files?uploadType=resumable&fields=id,size', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8', 'x-upload-content-type': type, ...(size ? { 'x-upload-content-length': String(size) } : {}) },
+    body: JSON.stringify({ name, parents: [env.DRIVE_FOLDER] }),
+  });
+  const url = response.headers.get('location');
+  if (!url) throw new Error(`Google Drive did not start the upload: ${response.status} ${await response.text()}`);
+  return url;
+};
+
+/** Sends bytes `from`..`from + size - 1` of a `total`-byte file to a session; returns the file once the last byte is in. */
+const sendRange = async (env, url, body, from, size, total) => {
+  const sized = new FixedLengthStream(size);
+  body.pipeTo(sized.writable).catch(() => undefined);
+  const response = await drive(env, url, { method: 'PUT', body: sized.readable, headers: { 'content-length': String(size), 'content-range': `bytes ${from}-${from + size - 1}/${total}` } });
+  if (response.status === 308) return null;
+  if (!response.ok) throw new Error(`Google Drive refused the upload: ${response.status} ${await response.text()}`);
+  return response.json();
+};
+
+const rememberFile = async (env, name, file) => {
+  await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(name)}`, { method: 'POST', body: JSON.stringify({ id: file.id, size: Number(file.size ?? 0) }) });
 };
 
 const upload = async (env, name, body, type, size) => {
-  const { upload_url: url } = await release(env);
-  const sized = new FixedLengthStream(size);
-  body.pipeTo(sized.writable);
-  const response = await github(env, url.replace('{?name,label}', `?name=${encodeURIComponent(name)}`), { method: 'POST', body: sized.readable, headers: { 'content-type': type, 'content-length': String(size) } });
-  if (!response.ok) throw new Error(`Upload failed: ${response.status} ${await response.text()}`);
+  const old = await fileId(env, name);
+  const file = await sendRange(env, await session(env, name, type, size), body, 0, size, size);
+  await rememberFile(env, name, file);
+  // a new poster or subtitles replace the old file
+  if (old && old !== file.id) await drive(env, `/drive/v3/files/${old}`, { method: 'DELETE' });
 };
 
-const catalog = async (env, change) => {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const current = await github(env, '/contents/videos.json');
-    const file = current.ok ? await current.json() : null;
-    const videos = file ? JSON.parse(decodeURIComponent(escape(atob(file.content.replace(/\n/g, ''))))) : [];
-    const next = change(videos);
-    const saved = await github(env, '/contents/videos.json', {
-      method: 'PUT',
-      body: JSON.stringify({ message: 'Update the catalog', content: btoa(unescape(encodeURIComponent(`${JSON.stringify(next, null, 2)}\n`))), ...(file ? { sha: file.sha } : {}) }),
-    });
-    if (saved.ok) return next;
-    if (saved.status !== 409) throw new Error(`Cannot save the catalog: ${saved.status}`);
-  }
-  throw new Error('The catalog is busy, try again');
+const asset = async (env, name, range) => {
+  const id = await fileId(env, name);
+  if (!id) return new Response(null, { status: 404 });
+  return drive(env, `/drive/v3/files/${id}?alt=media`, { headers: range ? { range } : {} });
 };
+
+const removeFiles = async (env, id) => {
+  const listed = await hidden(env).fetch(`https://index/files?prefix=${id}`).then((response) => response.json());
+  for (const [name, file] of Object.entries(listed)) {
+    await drive(env, `/drive/v3/files/${file.id}`, { method: 'DELETE' });
+    await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+  }
+};
+
+/** The open list, kept in the index object; `change` maps the old list to the new one. */
+const catalog = async (env, change) => {
+  const videos = await readCatalog(env);
+  const next = change(videos);
+  await hidden(env).fetch('https://index/catalog', { method: 'POST', body: JSON.stringify(next) });
+  return next;
+};
+
+const readCatalog = (env) => hidden(env).fetch('https://index/catalog').then((response) => response.json());
 
 const describe = (head) => {
   const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
@@ -179,13 +226,6 @@ const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(11)), (byte
 const allowed = (request, env) => Boolean(env.HUB_KEY) && request.headers.get('x-hub-key') === env.HUB_KEY;
 const PART_LIMIT = 30;
 
-const asset = (env, name, range) =>
-  fetch(`https://github.com/${env.REPO}/releases/download/${TAG}/${encodeURIComponent(name)}`, {
-    headers: { 'user-agent': 'gcast-hub', ...(range ? { range } : {}) },
-    redirect: 'follow',
-    cf: { cacheEverything: true, cacheTtl: 86400 },
-  });
-
 const fields = (url, admin) => {
   const title = (url.searchParams.get('title') ?? '').trim().slice(0, 120);
   const license = url.searchParams.get('license') ?? 'own';
@@ -213,24 +253,18 @@ const remember = async (env, entry) => {
   return json(visible(entry), 201);
 };
 
-const readCatalog = async (env) => {
-  const current = await github(env, '/contents/videos.json');
-  if (!current.ok) return [];
-  const file = await current.json();
-  return JSON.parse(decodeURIComponent(escape(atob(file.content.replace(/\n/g, '')))));
-};
-
 const adminList = async (env) => {
-  const [listed, unlisted, assets] = await Promise.all([
+  const [listed, unlisted, stored] = await Promise.all([
     readCatalog(env),
     hidden(env).fetch('https://index/list').then((response) => response.json()),
-    release(env).then((found) => found.assets ?? []),
+    hidden(env).fetch('https://index/files?prefix=').then((response) => response.json()),
   ]);
+  const assets = Object.entries(stored).map(([name, file]) => ({ name, size: file.size }));
   const known = new Set([...listed, ...unlisted].map((video) => video.id));
   const files = new Map();
   for (const item of assets) {
     const id = item.name.slice(0, 11);
-    files.set(id, (files.get(id) ?? 0) + (/\.gcast(\.\d+)?$/.test(item.name) ? item.size : 0));
+    files.set(id, (files.get(id) ?? 0) + (/^[\w-]{11}\.gcast$/.test(item.name) ? item.size : 0));
   }
   const orphans = [...files].filter(([id, size]) => !known.has(id) && size > 0).map(([id, size]) => ({ id, slug: id, title: '', license: 'own', listed: false, size, orphan: true }));
   const stats = await hidden(env).fetch(`https://index/stats?ids=${[...listed, ...unlisted].map((video) => video.id).slice(0, 100).join(',')}`).then((response) => response.json());
@@ -243,8 +277,7 @@ const adminUpdate = async (request, env, id) => {
   const unlisted = await hidden(env).fetch('https://index/list').then((response) => response.json());
   let entry = listed.find((video) => video.id === id) ?? unlisted.find((video) => video.id === id);
   if (!entry) {
-    const head = await asset(env, `${id}.gcast`, 'bytes=0-19');
-    const first = head.ok ? head : await asset(env, `${id}.gcast.0`, 'bytes=0-19');
+    const first = await asset(env, `${id}.gcast`, 'bytes=0-19');
     if (!first.ok) return json({ error: 'No such video' }, 404);
     entry = { id, slug: id, title: id, license: 'own', listed: false, size: 0, ...describe(new Uint8Array(await first.arrayBuffer())), poster: false, added: new Date().toISOString().slice(0, 10) };
   }
@@ -272,8 +305,7 @@ const adminUpdate = async (request, env, id) => {
 };
 
 const adminDelete = async (env, id) => {
-  const found = await release(env);
-  for (const item of found.assets ?? []) if (item.name.startsWith(`${id}.`)) await github(env, `/releases/assets/${item.id}`, { method: 'DELETE' });
+  await removeFiles(env, id);
   await catalog(env, (videos) => videos.filter((video) => video.id !== id));
   await hidden(env).fetch(`https://index/delete?id=${id}`, { method: 'POST' });
   return json({ ok: true });
@@ -301,6 +333,20 @@ export class Index {
     if (url.pathname === '/delete') {
       await this.storage.delete(`video:${url.searchParams.get('id')}`);
       return Response.json({ ok: true });
+    }
+    if (url.pathname === '/catalog') {
+      if (request.method === 'POST') await this.storage.put('catalog', await request.json());
+      return Response.json((await this.storage.get('catalog')) ?? []);
+    }
+    if (url.pathname === '/file') {
+      const key = `file:${url.searchParams.get('name')}`;
+      if (request.method === 'POST') await this.storage.put(key, await request.json());
+      if (request.method === 'DELETE') await this.storage.delete(key);
+      return Response.json((await this.storage.get(key)) ?? null);
+    }
+    if (url.pathname === '/files') {
+      const found = await this.storage.list({ prefix: `file:${url.searchParams.get('prefix') ?? ''}` });
+      return Response.json(Object.fromEntries([...found].map(([key, value]) => [key.slice(5), value])));
     }
     if (url.pathname === '/get') {
       const entry = await this.storage.get(`video:${url.searchParams.get('id')}`);
@@ -358,10 +404,13 @@ export class Index {
   }
 }
 
-const partsStart = async (request, env) => {
+const partsStart = async (request, env, url) => {
+  const total = Number(url.searchParams.get('size') ?? 0);
+  if (!total || total > PART * PART_LIMIT) return json({ error: `Say the file size: /parts/start?size=<bytes>, up to ${PART * PART_LIMIT} bytes` }, 400);
   const id = newId();
   const edit = token();
-  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ token: edit, next: 0, check: { header: false, skip: 0, trailer: false }, who: await visitor(request) }) });
+  const upload = await session(env, `${id}.gcast`, 'application/octet-stream', total);
+  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ token: edit, next: 0, offset: 0, total, upload, check: { header: false, skip: 0, trailer: false }, who: await visitor(request) }) });
   return json({ id, part: PART, token: edit });
 };
 
@@ -373,12 +422,15 @@ const partUpload = async (request, env, id, index) => {
   if (index < state.next) return json({ ok: true, already: true });
   if (index !== state.next) return json({ error: `Send part ${state.next} first` }, 409);
   const size = Number(request.headers.get('content-length') ?? 0);
-  if (!size || size > PART) return json({ error: `A part must be from 1 byte to ${PART} bytes` }, 400);
+  const last = state.offset + size === state.total;
+  // Drive takes resumable pieces in multiples of 256 KiB, except the last one
+  if (!size || size > PART || state.offset + size > state.total || (!last && size % 262144 !== 0)) return json({ error: `A part must be ${PART} bytes (the last one: the rest of the file)` }, 400);
   if (!admin && !(await spend(env, state.who, size, index === 0 ? 1 : 0))) return json({ error: 'The daily upload limit for your address is used up, try tomorrow' }, 429);
-  const check = { ...state.check, last: false };
-  await upload(env, `${id}.gcast.${index}`, request.body.pipeThrough(checker(check)), 'application/octet-stream', size);
+  const check = { ...state.check, last };
+  const file = await sendRange(env, state.upload, request.body.pipeThrough(checker(check)), state.offset, size, state.total);
   delete check.last;
-  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ ...state, next: index + 1, check }) });
+  if (file) await rememberFile(env, `${id}.gcast`, file);
+  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ ...state, next: index + 1, offset: state.offset + size, check, done: Boolean(file) }) });
   return json({ ok: true });
 };
 
@@ -389,66 +441,14 @@ const partFinish = async (request, env, id, url) => {
   if (state.check.skip > 0 || !state.check.header) return json({ error: 'The .gcast file ends in the middle of a chunk' }, 400);
   const given = fields(url, admin);
   if (given.error) return json(given, 400);
-  const sizes = (url.searchParams.get('sizes') ?? '').split(',').map(Number).filter((size) => size > 0);
-  if (sizes.length === 0 || sizes.length !== state.next) return json({ error: `Part sizes are needed for all ${state.next} parts` }, 400);
-  const head = await asset(env, `${id}.gcast.0`, 'bytes=0-19');
-  if (!head.ok) return json({ error: 'The first part is missing' }, 400);
+  if (!state.done) return json({ error: `Only ${state.offset} of ${state.total} bytes arrived` }, 400);
+  const head = await asset(env, `${id}.gcast`, 'bytes=0-19');
+  if (!head.ok) return json({ error: 'The file is missing on the Drive' }, 500);
   const info = describe(new Uint8Array(await head.arrayBuffer()));
-  const manifest = new TextEncoder().encode(JSON.stringify({ sizes }));
-  await upload(env, `${id}.parts`, new Blob([manifest]).stream(), 'application/json', manifest.length);
-  const size = sizes.reduce((sum, part) => sum + part, 0);
+  const size = state.total;
   const entry = { id, slug: slugify(given.title) || id, ...given, size, ...info, poster: false, added: new Date().toISOString().slice(0, 10), ...(admin ? {} : { token: state.token, who: state.who }) };
   const answer = await remember(env, entry);
   return admin ? answer : json({ ...visible(entry), token: state.token }, 201);
-};
-
-const stitched = async (request, env, id) => {
-  const manifest = await asset(env, `${id}.parts`);
-  if (!manifest.ok) return null;
-  const { sizes } = await manifest.json();
-  const total = sizes.reduce((sum, part) => sum + part, 0);
-  const wanted = /bytes=(\d*)-(\d*)/.exec(request.headers.get('range') ?? '');
-  let start = 0;
-  let end = total - 1;
-  if (wanted) {
-    if (!wanted[1] && wanted[2]) start = Math.max(0, total - Number(wanted[2]));
-    else {
-      start = Number(wanted[1] || 0);
-      if (wanted[2]) end = Math.min(total - 1, Number(wanted[2]));
-    }
-    if (start >= total || start > end) return new Response(null, { status: 416, headers: { ...CORS, 'content-range': `bytes */${total}` } });
-  }
-  const headers = { ...CORS, 'content-type': 'application/octet-stream', 'accept-ranges': 'bytes', 'content-length': String(end - start + 1), 'cache-control': 'public, max-age=86400' };
-  if (wanted) headers['content-range'] = `bytes ${start}-${end}/${total}`;
-  if (request.method === 'HEAD') return new Response(null, { status: wanted ? 206 : 200, headers });
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
-  const pump = async () => {
-    let offset = 0;
-    for (let index = 0; index < sizes.length; index += 1) {
-      const from = Math.max(start, offset);
-      const to = Math.min(end, offset + sizes[index] - 1);
-      if (from <= to) {
-        // GitHub sometimes ends a response early without an error, so keep asking for the rest of the range
-        for (let at = from, tries = 0; at <= to; ) {
-          if ((tries += 1) > 8) throw new Error(`Part ${index} keeps breaking off`);
-          const part = await asset(env, `${id}.gcast.${index}`, `bytes=${at - offset}-${to - offset}`);
-          if (part.status !== 206 || !part.body) throw new Error(`Part ${index}: HTTP ${part.status}`);
-          const reader = part.body.getReader();
-          for (;;) {
-            const { done, value } = await reader.read().catch(() => ({ done: true }));
-            if (done) break;
-            await writer.write(value);
-            at += value.length;
-          }
-        }
-      }
-      offset += sizes[index];
-    }
-    await writer.close();
-  };
-  pump().catch((error) => writer.abort(error).catch(() => undefined));
-  return new Response(readable, { status: wanted ? 206 : 200, headers });
 };
 
 const publish = async (request, env, url) => {
@@ -529,22 +529,29 @@ const meta = async (env, id) => {
 const TYPES = { jpg: 'image/jpeg', vtt: 'text/vtt; charset=utf-8', gcast: 'application/octet-stream' };
 
 const serveFile = async (request, env, name) => {
-  const headers = new Headers({ 'user-agent': 'gcast-hub' });
   const range = request.headers.get('range');
-  if (range) headers.set('range', range);
-  const upstream = await fetch(`https://github.com/${env.REPO}/releases/download/${TAG}/${encodeURIComponent(name)}`, { headers, redirect: 'follow', cf: { cacheEverything: true, cacheTtl: 86400 } });
-  if (upstream.status === 404 && name.endsWith('.gcast')) {
-    const parts = await stitched(request, env, name.slice(0, -6));
-    if (parts) return parts;
+  const cache = caches.default;
+  // Drive answers need the token, so Cloudflare does not cache them by itself: keep each answer under the public URL and range
+  const key = new Request(`${new URL(request.url).origin}/v/${name}?range=${encodeURIComponent(range ?? '')}`);
+  if (request.method === 'GET') {
+    const cached = await cache.match(key);
+    if (cached) return cached;
   }
+  const upstream = await asset(env, name, range);
   const out = new Headers(CORS);
-  for (const key of ['content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
-    const value = upstream.headers.get(key);
-    if (value) out.set(key, value);
+  for (const header of ['content-length', 'content-range', 'etag', 'last-modified']) {
+    const value = upstream.headers.get(header);
+    if (value) out.set(header, value);
   }
+  out.set('accept-ranges', 'bytes');
   out.set('content-type', TYPES[name.split('.').pop()] ?? 'application/octet-stream');
   out.set('cache-control', 'public, max-age=86400');
-  return new Response(request.method === 'HEAD' ? null : upstream.body, { status: upstream.status, headers: out });
+  if (request.method === 'HEAD' || !upstream.ok) return new Response(null, { status: upstream.ok ? upstream.status : 404, headers: out });
+  const [give, keep] = upstream.body.tee();
+  // ponytail: the cache keeps answers up to 50 MB; whole-file downloads of big videos always go to Drive
+  if (Number(out.get('content-length') ?? 0) < 50 * 1048576) await cache.put(key, new Response(keep, { status: upstream.status, headers: out })).catch(() => undefined);
+  else keep.cancel();
+  return new Response(give, { status: upstream.status, headers: out });
 };
 
 export class Room {
@@ -636,7 +643,15 @@ export default {
         if (target && request.method === 'POST') return target[2] ? adminDelete(env, target[1]) : adminUpdate(request, env, target[1]);
         return json({ error: 'Not found' }, 404);
       }
-      if (url.pathname === '/parts/start' && request.method === 'POST') return partsStart(request, env);
+      if (url.pathname === '/parts/start' && request.method === 'POST') return partsStart(request, env, url);
+      if (url.pathname === '/videos' && request.method === 'GET') return new Response(JSON.stringify(await readCatalog(env)), { headers: { ...CORS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=30' } });
+      if (url.pathname === '/admin/import' && request.method === 'POST') {
+        if (!allowed(request, env)) return json({ error: 'Wrong upload key' }, 403);
+        const { catalog: list = [], unlisted = [] } = await request.json();
+        await catalog(env, () => list);
+        for (const entry of unlisted) await keepHidden(env, entry);
+        return json({ ok: true, listed: list.length, unlisted: unlisted.length });
+      }
       const about = /^\/meta\/([\w-]{11})$/.exec(url.pathname);
       if (about && request.method === 'GET') return meta(env, about[1]);
       if (url.pathname === '/stats' && request.method === 'GET') return json(await hidden(env).fetch(`https://index/stats?ids=${encodeURIComponent(url.searchParams.get('ids') ?? '')}`).then((response) => response.json()));
@@ -655,7 +670,7 @@ export default {
       if (extra && request.method === 'POST') return variant(request, env, extra[1], url);
       const captions = /^\/subtitles\/([\w-]{11})$/.exec(url.pathname);
       if (captions && request.method === 'POST') return subtitles(request, env, captions[1]);
-      if (url.pathname === '/') return json({ hub: env.REPO, files: '/v/<id>.gcast', upload: 'POST /upload?title=&license=&listed=1&source= with a .gcast body; anonymous uploads wait for review' });
+      if (url.pathname === '/') return json({ hub: 'gcast hub', storage: 'Google Drive', files: '/v/<id>.gcast', upload: 'POST /upload?title=&license=&listed=1&source= with a .gcast body; anonymous uploads wait for review' });
       return json({ error: 'Not found' }, 404);
     } catch (error) {
       return json({ error: error.message }, 500);

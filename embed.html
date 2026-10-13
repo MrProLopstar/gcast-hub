@@ -19,7 +19,7 @@ glyph-player::part(canvas) { object-fit: contain; }
 import 'https://cdn.jsdelivr.net/npm/glyphcast@0.20.0/dist/element.js/+esm';
 
 const key = new URLSearchParams(location.search).get('v') ?? '';
-const [config, videos] = await Promise.all([fetch('./hub.json').then((response) => response.json()), fetch('./videos.json', { cache: 'no-cache' }).then((response) => response.json()).catch(() => [])]);
+const [config, videos] = await Promise.all([fetch('./hub.json').then((response) => response.json()), fetch('./hub.json').then((response) => response.json()).then((hub) => fetch(`${hub.files}/videos`, { cache: 'no-cache' })).then((response) => response.json()).catch(() => [])]);
 let video = videos.find((item) => item.slug === key || item.id === key);
 const id = video?.id ?? key;
 if (!video && /^[w-]{11}$/.test(id)) video = await fetch(`${config.files}/meta/${id}`).then((response) => (response.ok ? response.json() : undefined)).catch(() => undefined);

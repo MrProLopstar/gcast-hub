@@ -134,7 +134,7 @@ const LICENSE = { CC0: 'CC0', 'CC-BY': 'CC BY', 'CC-BY-SA': 'CC BY-SA', 'CC-BY-N
 
 let videos = [];
 try {
-  videos = await (await fetch('./videos.json', { cache: 'no-cache' })).json();
+  videos = await (await fetch(`${WORKER}/videos`, { cache: 'no-cache' })).json();
 } catch {
   videos = [];
 }
@@ -359,7 +359,7 @@ $('send').addEventListener('click', async () => {
     let entry;
     if (file.size <= 95 * 1048576) entry = await send(`${WORKER}/upload?${query}`, file, show);
     else {
-      const { id, part, token } = await send(`${WORKER}/parts/start`, null);
+      const { id, part, token } = await send(`${WORKER}/parts/start?size=${file.size}`, null);
       editToken = token ?? '';
       const sizes = [];
       for (let offset = 0, index = 0; offset < file.size; offset += part, index += 1) {
@@ -367,7 +367,6 @@ $('send').addEventListener('click', async () => {
         await send(`${WORKER}/parts/${id}/${index}`, piece, (share) => show((offset + share * piece.size) / file.size));
         sizes.push(piece.size);
       }
-      query.set('sizes', sizes.join(','));
       entry = await send(`${WORKER}/parts/${id}/finish?${query}`, null);
     }
     if (entry.token) editToken = entry.token;
