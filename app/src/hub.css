@@ -93,8 +93,11 @@ main { padding: 24px; padding-block-end: 64px; }
 }
 
 /* ambient glow: the blurred current frame spreads behind the player and fades as the picture changes */
-.ambient { position: relative; isolation: isolate; }
-.ambient > canvas { position: absolute; inset: -4% -3%; width: 106%; height: 108%; z-index: -1; filter: blur(70px) saturate(1.5); opacity: 0; transition: opacity 1.2s; pointer-events: none; }
+/* no isolation here: a player filling the window on phones must rise above the whole page, not only above this box */
+.ambient { position: relative; }
+.ambient > glyph-player { position: relative; z-index: 1; }
+.ambient > glyph-player.filled, glyph-player.filled { position: fixed; inset: 0; z-index: 2147483647; }
+.ambient > canvas { position: absolute; inset: -4% -3%; width: 106%; height: 108%; z-index: 0; filter: blur(70px) saturate(1.5); opacity: 0; transition: opacity 1.2s; pointer-events: none; }
 .ambient > canvas.lit { opacity: 0.45; }
 @media (prefers-reduced-motion: reduce) { .ambient > canvas { transition: none; } }
 .watch, main { overflow-x: clip; }
@@ -175,4 +178,10 @@ html, body { overflow-x: hidden; }
   .side { padding: 0 12px; }
   .top .logo { font-size: 18px; }
   .top .button { width: 38px; height: 38px; padding: 0; justify-content: center; border-radius: 50%; }
+}
+
+/* a phone held upright in an in-app browser (no real fullscreen, no orientation lock): the filled player turns
+   sideways so the picture uses the long side of the screen, like a video app in landscape */
+@media (orientation: portrait) and (max-width: 640px) {
+  glyph-player.filled, .ambient > glyph-player.filled { inset: auto; top: 0; left: 0; width: 100dvh; height: 100dvw; transform: rotate(90deg) translateY(-100%); transform-origin: top left; }
 }
