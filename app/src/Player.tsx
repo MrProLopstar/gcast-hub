@@ -7,7 +7,7 @@ declare module 'react' {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace JSX {
     interface IntrinsicElements {
-      'glyph-player': Attributes & { ref?: React.Ref<HTMLElement>; class?: string };
+      'glyph-player': React.HTMLAttributes<HTMLElement> & React.RefAttributes<HTMLElement> & Record<string, unknown>;
     }
   }
 }

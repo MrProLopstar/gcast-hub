@@ -1,32 +1,23 @@
 # gcast hub
 
-Videos as colored glyphs: watch them in the browser at [mrprolopstar.github.io/gcast-hub](https://mrprolopstar.github.io/gcast-hub/) or in a terminal:
+Videos as colored glyphs: watch them at [glc-hub.1lop.ru](https://glc-hub.1lop.ru) or in a terminal:
 
-```sh
-npx glyphcast hub                 # list and search
-npx glyphcast play hub:<name>     # watch, with sound, pause and seeking
 ```
-
-Openly licensed videos are listed and searchable, others open by link.
+npx glyphcast hub                    # list and search
+npx glyphcast play hub:<name>        # watch, with sound, pause and seeking
+```
 
 ## How it works
 
-- `.gcast` files and posters are assets of the `videos` release of this repository.
-- `videos.json` is the catalog of listed videos, `hub.json` points to the file server.
-- `worker/` is a Cloudflare Worker: it serves the release assets with CORS and range requests, so players can seek, and accepts uploads with the hub key, then updates the catalog.
+- `app/` is the site: React + Vite, built into `docs/`, which GitHub Pages serves on glc-hub.1lop.ru (`cd app && npm run build`).
+- `worker/` is a Cloudflare Worker: files live in a private Google Drive folder, the worker serves them in cached 4 MB blocks with range requests, keeps the catalog, views and votes in a Durable Object, and checks every upload is a real `.gcast`.
+- Anyone can upload; openly licensed videos reach the open list after review in `admin.html`.
 
-## Live
+## Deploy the worker
 
-Open the hub, enter the upload key and start a broadcast from a camera or the screen. Viewers watch at `?live=<room>` or run `npx glyphcast play live:<room>`. A Durable Object per room fans the stream out.
-
-## Deploy
-
-```sh
+```
 cd worker
-npx wrangler login
-npx wrangler secret put GITHUB_TOKEN   # fine-grained token: this repo, Contents read and write
-npx wrangler secret put HUB_KEY        # any long random string; uploads need it
+node google-login.mjs <client_secret.json>   # connects Google Drive, stores the keys as worker secrets
+npx wrangler secret put HUB_KEY              # admin key
 npx wrangler deploy
 ```
-
-Put the Worker URL into `hub.json` and enable GitHub Pages for the main branch.

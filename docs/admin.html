@@ -2,153 +2,20 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gcast hub · админка</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Админка · gcast hub</title>
+<meta name="description" content="Видео из цветных символов: смотреть в браузере и в терминале.">
+<meta property="og:title" content="gcast hub">
+<meta property="og:image" content="https://glc-hub.1lop.ru/preview.jpg">
 <meta name="robots" content="noindex">
-<style>
-:root { --bg: #07090c; --panel: #0e1217; --line: #1d242c; --ink: #e8ecef; --muted: #8b949e; --accent: #f0a04b; --mono: ui-monospace, "SFMono-Regular", Consolas, monospace; color-scheme: dark; }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 48px; }
-header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 18px; }
-h1 { margin: 0; font: 700 24px var(--mono); }
-h1 span { color: var(--accent); }
-a { color: var(--accent); }
-input, select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
-button { cursor: pointer; }
-button:hover { border-color: var(--accent); }
-button.danger:hover { border-color: #e5534b; color: #ff7b72; }
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.status { color: var(--muted); margin: 10px 0; }
-.table { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
-table { width: 100%; border-collapse: collapse; min-width: 860px; }
-th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
-th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
-tr:last-child td { border-bottom: 0; }
-td input[type="text"], td input[type="url"] { width: 100%; min-width: 220px; box-sizing: border-box; }
-td input[type="url"] { margin-top: 6px; font-size: 12px; }
-.tag.review { color: #ffa657; border-color: #ffa65766; }
-.id { font: 12px var(--mono); color: var(--muted); }
-.tag { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
-.tag.open { color: #7ee787; border-color: #2ea04366; }
-.tag.orphan { color: var(--accent); border-color: #f0a04b66; }
-.actions { display: flex; gap: 6px; white-space: nowrap; }
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+  <script type="module" crossorigin src="/assets/admin-CfQ82ALb.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/api-L9xtykqk.js">
+  <link rel="stylesheet" crossorigin href="/assets/hub-CKavqMYF.css">
 </head>
 <body>
-<main>
-  <header>
-    <h1>gcast<span>hub</span> · админка</h1>
-    <div class="row">
-      <input id="key" type="password" placeholder="Ключ загрузки">
-      <button id="load" type="button">Показать</button>
-      <a href="./">К хабу</a>
-    </div>
-  </header>
-  <p class="status" id="status">Введите ключ загрузки. Здесь видны все видео, в том числе доступные только по ссылке.</p>
-  <div class="table" id="table" hidden>
-    <table>
-      <thead><tr><th>Название</th><th>Доступ</th><th>Лицензия</th><th>Длина</th><th>Размер</th><th></th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
-  </div>
-</main>
-<script type="module">
-const WORKER = (await (await fetch('./hub.json', { cache: 'no-cache' })).json()).files;
-const $ = (id) => document.getElementById(id);
-const LICENSES = [['own', 'Без лицензии'], ['CC0', 'CC0'], ['CC-BY', 'CC BY'], ['CC-BY-SA', 'CC BY-SA'], ['CC-BY-NC', 'CC BY-NC'], ['public-domain', 'Общественное достояние']];
-const escape = (text) => String(text).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
-const clock = (seconds) => {
-  if (!seconds) return '—';
-  const total = Math.round(seconds);
-  const hours = Math.floor(total / 3600);
-  const rest = `${String(Math.floor((total % 3600) / 60)).padStart(hours ? 2 : 1, '0')}:${String(total % 60).padStart(2, '0')}`;
-  return hours ? `${hours}:${rest}` : rest;
-};
-
-try {
-  $('key').value = localStorage.getItem('gcast-hub-key') ?? '';
-} catch {}
-
-const call = async (path, init = {}) => {
-  const response = await fetch(`${WORKER}${path}`, { ...init, headers: { 'x-hub-key': $('key').value, 'content-type': 'application/json' } });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-  return data;
-};
-
-const link = (video) => new URL(video.listed ? `./?v=${encodeURIComponent(video.slug)}` : `./?v=${video.id}`, location.href).href;
-
-const render = (videos) => {
-  $('rows').innerHTML = videos
-    .map((video) => `<tr data-id="${video.id}">
-      <td><input type="text" data-title value="${escape(video.title)}" placeholder="Без названия"><input type="url" data-source value="${escape(video.source ?? '')}" placeholder="Ссылка на оригинал"><div class="id">${video.id}${video.stats ? ` · ${video.stats.views} просм. · +${video.stats.up} −${video.stats.down}` : ''}</div></td>
-      <td>${video.orphan ? '<span class="tag orphan">без записи</span>' : video.listed ? '<span class="tag open">в списке</span>' : '<span class="tag">по ссылке</span>'}${video.review ? ' <span class="tag review">просит в список</span>' : ''}
-        <label class="row"><input type="checkbox" data-listed ${video.listed ? 'checked' : ''}> в списке</label></td>
-      <td><select>${LICENSES.map(([value, label]) => `<option value="${value}" ${value === video.license ? 'selected' : ''}>${label}</option>`).join('')}</select></td>
-      <td>${clock(video.duration)}</td>
-      <td>${((video.files || video.size || 0) / 1048576).toFixed(1)} МБ</td>
-      <td class="actions"><button data-save type="button">Сохранить</button><button data-copy type="button">Ссылка</button><button data-delete class="danger" type="button">Удалить</button></td>
-    </tr>`)
-    .join('');
-  for (const row of $('rows').querySelectorAll('tr')) {
-    const video = videos.find((item) => item.id === row.dataset.id);
-    row.querySelector('[data-save]').addEventListener('click', async () => {
-      try {
-        const saved = await call(`/admin/videos/${video.id}`, {
-          method: 'POST',
-          body: JSON.stringify({ title: row.querySelector('[data-title]').value, source: row.querySelector('[data-source]').value, license: row.querySelector('select').value, listed: row.querySelector('[data-listed]').checked }),
-        });
-        $('status').textContent = `Сохранено: ${saved.title}. Общий список обновится через минуту.`;
-        await load();
-      } catch (error) {
-        $('status').textContent = `Не сохранилось: ${error.message}`;
-      }
-    });
-    row.querySelector('[data-copy]').addEventListener('click', async () => {
-      await navigator.clipboard.writeText(link(video));
-      $('status').textContent = `Ссылка скопирована: ${link(video)}`;
-    });
-    row.querySelector('[data-delete]').addEventListener('click', async (event) => {
-      const button = event.currentTarget;
-      if (button.dataset.armed !== '1') {
-        button.dataset.armed = '1';
-        button.textContent = 'Точно?';
-        setTimeout(() => {
-          button.dataset.armed = '';
-          button.textContent = 'Удалить';
-        }, 3000);
-        return;
-      }
-      try {
-        await call(`/admin/videos/${video.id}/delete`, { method: 'POST' });
-        $('status').textContent = 'Удалено.';
-        await load();
-      } catch (error) {
-        $('status').textContent = `Не удалилось: ${error.message}`;
-      }
-    });
-  }
-};
-
-const load = async () => {
-  try {
-    localStorage.setItem('gcast-hub-key', $('key').value);
-  } catch {}
-  try {
-    const { videos } = await call('/admin/videos');
-    // videos waiting for review come first
-    render([...videos].sort((a, b) => Number(Boolean(b.review)) - Number(Boolean(a.review))));
-    $('table').hidden = false;
-    $('status').textContent = `Видео: ${videos.length}. Открытые видно всем, остальные только по ссылке.`;
-  } catch (error) {
-    $('table').hidden = true;
-    $('status').textContent = `Не получилось: ${error.message}`;
-  }
-};
-
-$('load').addEventListener('click', load);
-if ($('key').value) load();
-</script>
+<div id="root"></div>
 </body>
 </html>

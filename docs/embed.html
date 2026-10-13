@@ -2,49 +2,20 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>gcast hub</title>
+<meta name="description" content="Видео из цветных символов: смотреть в браузере и в терминале.">
+<meta property="og:title" content="gcast hub">
+<meta property="og:image" content="https://glc-hub.1lop.ru/preview.jpg">
 <meta name="robots" content="noindex">
-<style>
-html, body { margin: 0; height: 100%; background: #000; color: #e8ecef; font: 13px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
-glyph-player { position: absolute; inset: 0; --radius: 0; }
-glyph-player::part(canvas) { object-fit: contain; }
-.brand { position: absolute; top: 10px; right: 12px; padding: 3px 8px; border-radius: 6px; background: rgba(12, 15, 20, 0.8); color: #f0a04b; text-decoration: none; font: 600 12px ui-monospace, Consolas, monospace; opacity: 0.85; z-index: 1; }
-.brand:hover { opacity: 1; }
-.missing { display: grid; place-items: center; height: 100%; color: #8b949e; }
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+  <script type="module" crossorigin src="/assets/embed-C3w96kLk.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/api-L9xtykqk.js">
+  <link rel="modulepreload" crossorigin href="/assets/Player-BrTjGMDy.js">
 </head>
 <body>
-<script type="module">
-import './lib/element.js';
-
-const key = new URLSearchParams(location.search).get('v') ?? '';
-const [config, videos] = await Promise.all([fetch('./hub.json').then((response) => response.json()), fetch('./hub.json').then((response) => response.json()).then((hub) => fetch(`${hub.files}/videos`, { cache: 'no-cache' })).then((response) => response.json()).catch(() => [])]);
-let video = videos.find((item) => item.slug === key || item.id === key);
-const id = video?.id ?? key;
-if (!video && /^[w-]{11}$/.test(id)) video = await fetch(`${config.files}/meta/${id}`).then((response) => (response.ok ? response.json() : undefined)).catch(() => undefined);
-if (!/^[\w-]{11}$/.test(id)) {
-  document.body.innerHTML = '<div class="missing">Видео не найдено</div>';
-} else {
-  const player = document.createElement('glyph-player');
-  player.setAttribute('src', `${config.files}/v/${id}.gcast`);
-  if (video?.variants?.length) player.setAttribute('sources', JSON.stringify([{ cols: video.cols, src: `${config.files}/v/${id}.gcast` }, ...video.variants.map((cols) => ({ cols, src: `${config.files}/v/${id}-${cols}.gcast` }))]));
-  if (video?.poster) player.setAttribute('poster', `${config.files}/v/${id}.jpg`);
-  if (video?.subtitles) player.setAttribute('subtitles', `${config.files}/v/${id}.vtt`);
-  player.setAttribute('mode', 'braille');
-  if (video?.title) player.setAttribute('heading', video.title);
-  if (video?.source) player.setAttribute('source', video.source);
-  player.addEventListener('play', () => fetch(`${config.files}/view/${id}`, { method: 'POST' }).catch(() => undefined), { once: true });
-  player.setAttribute('fullsize', '');
-  const brand = document.createElement('a');
-  brand.className = 'brand';
-  brand.href = new URL(`./?v=${encodeURIComponent(video?.listed ? video.slug : id)}`, location.href).href;
-  brand.target = '_blank';
-  brand.rel = 'noopener';
-  brand.textContent = 'gcast hub';
-  document.title = `${video?.title ?? 'Видео'} · gcast hub`;
-  document.body.append(player, brand);
-}
-</script>
+<div id="root"></div>
 </body>
 </html>
