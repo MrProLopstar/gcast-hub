@@ -93,7 +93,7 @@ const SORTS: [Sort, string][] = [
   ['long', 'Длинные'],
 ];
 
-const Home = ({ videos, files, query }: { videos: Video[]; files: string; query: string }) => {
+const Home = ({ videos, files, query, loaded }: { videos: Video[]; files: string; query: string; loaded: boolean }) => {
   const [sort, setSort] = useState<Sort>('new');
   const [numbers, setNumbers] = useState<Record<string, Stats>>({});
   useEffect(() => {
@@ -121,7 +121,21 @@ const Home = ({ videos, files, query }: { videos: Video[]; files: string; query:
         ))}
       </div>
       {query && <p className="meta">Найдено: {list.length}</p>}
-      <Grid videos={list} files={files} />
+      {loaded ? (
+        <Grid videos={list} files={files} />
+      ) : (
+        <div className="grid" aria-busy="true" aria-label="Загружаю видео">
+          {Array.from({ length: 8 }, (_, at) => (
+            <div key={at} className="card">
+              <div className="skeleton thumb" />
+              <div>
+                <div className="skeleton line wide" style={{ marginTop: 0 }} />
+                <div className="skeleton line" style={{ marginTop: 8 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </main>
   );
 };
@@ -154,7 +168,19 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
   const counted = useCallback(() => {
     if (video) void view(video.id).then(setStat).catch(() => undefined);
   }, [video?.id]);
-  if (video === undefined) return <main className="empty">Загружаю…</main>;
+  if (video === undefined)
+    return (
+      <main className="watch" aria-busy="true">
+        <section>
+          <div className="skeleton player">
+            <span className="spinner" aria-hidden="true" />
+            <span className="meta">Загружаю видео</span>
+          </div>
+          <div className="skeleton line wide" />
+          <div className="skeleton line" />
+        </section>
+      </main>
+    );
   if (video === null) return <main className="empty">Такого видео нет.</main>;
   const name = video.id;
   // the share link goes through the worker, so messengers show this video's title and poster
@@ -415,7 +441,7 @@ const App = () => {
           </button>
         </nav>
       </header>
-      {files && route.page === 'home' && <Home videos={videos} files={files} query={route.query} />}
+      {files && route.page === 'home' && <Home videos={videos} files={files} query={route.query} loaded={loaded} />}
       {files && route.page === 'watch' && <Watch key$={route.key} videos={videos} files={files} loaded={loaded} />}
       {files && route.page === 'live' && <LiveWatch room={route.room} files={files} />}
       {dialog === 'upload' && (
