@@ -572,7 +572,7 @@ const meta = async (env, id) => {
 
 const TYPES = { jpg: 'image/jpeg', vtt: 'text/vtt; charset=utf-8', gcast: 'application/octet-stream' };
 
-const serveFile = async (request, env, name) => {
+const serveFile = async (request, env, ctx, name) => {
   const range = request.headers.get('range');
   const cache = caches.default;
   // Drive answers need the token, so Cloudflare does not cache them by itself: keep each answer under the public URL and range
@@ -591,11 +591,11 @@ const serveFile = async (request, env, name) => {
   out.set('content-type', TYPES[name.split('.').pop()] ?? 'application/octet-stream');
   out.set('cache-control', 'public, max-age=86400');
   if (request.method === 'HEAD' || !upstream.ok) return new Response(null, { status: upstream.ok ? upstream.status : 404, headers: out });
-  const [give, keep] = upstream.body.tee();
-  // ponytail: the cache keeps answers up to 50 MB; whole-file downloads of big videos always go to Drive
-  if (Number(out.get('content-length') ?? 0) < 50 * 1048576) await cache.put(key, new Response(keep, { status: upstream.status, headers: out })).catch(() => undefined);
-  else keep.cancel();
-  return new Response(give, { status: upstream.status, headers: out });
+  // ponytail: answers up to 8 MB (the player's chunk ranges) are read whole and cached; bigger ones stream from Drive
+  if (Number(out.get('content-length') ?? Infinity) > 8 * 1048576) return new Response(upstream.body, { status: upstream.status, headers: out });
+  const body = await upstream.arrayBuffer();
+  ctx.waitUntil(cache.put(key, new Response(body, { status: upstream.status, headers: out })).catch(() => undefined));
+  return new Response(body, { status: upstream.status, headers: out });
 };
 
 export class Room {
@@ -668,7 +668,7 @@ export class Room {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     const url = new URL(request.url);
     const live = /^\/live\/([\w-]{1,40})(\.gcast|\/broadcast)$/.exec(url.pathname);
@@ -678,7 +678,7 @@ export default {
     }
     try {
       const file = /^\/v\/([\w-]{11}(?:-\d{2,4})?)\.(gcast|jpg|vtt)$/.exec(url.pathname);
-      if (file && (request.method === 'GET' || request.method === 'HEAD')) return serveFile(request, env, `${file[1]}.${file[2]}`);
+      if (file && (request.method === 'GET' || request.method === 'HEAD')) return serveFile(request, env, ctx, `${file[1]}.${file[2]}`);
       if (url.pathname === '/upload' && request.method === 'POST') return publish(request, env, url);
       if (url.pathname.startsWith('/admin/')) {
         if (!allowed(request, env)) return json({ error: 'Wrong upload key' }, 403);
