@@ -269,6 +269,24 @@ const poster = async (request, env, id) => {
   return json({ ok: true });
 };
 
+const variant = async (request, env, id, url) => {
+  if (!allowed(request, env)) return json({ error: 'Wrong upload key' }, 403);
+  const size = Number(request.headers.get('content-length') ?? 0);
+  if (!size || size > PART) return json({ error: `A variant must be from 1 byte to ${PART} bytes` }, 400);
+  const [peek, body] = request.body.tee();
+  const reader = peek.getReader();
+  const first = await reader.read();
+  reader.cancel();
+  const { cols } = describe(first.value ?? new Uint8Array());
+  await upload(env, `${id}-${cols}.gcast`, body, 'application/octet-stream', size);
+  const add = (video) => (video.id === id ? { ...video, variants: [...new Set([...(video.variants ?? []), cols])].sort((a, b) => a - b) } : video);
+  await catalog(env, (videos) => videos.map(add));
+  const unlisted = await hidden(env).fetch('https://index/list').then((response) => response.json());
+  const entry = unlisted.find((video) => video.id === id);
+  if (entry) await keepHidden(env, add(entry));
+  return json({ ok: true, cols });
+};
+
 const subtitles = async (request, env, id) => {
   if (!env.HUB_KEY || request.headers.get('x-hub-key') !== env.HUB_KEY) return json({ error: 'Wrong upload key' }, 403);
   await upload(env, `${id}.vtt`, request.body, 'text/vtt; charset=utf-8', Number(request.headers.get('content-length') ?? 0));
@@ -377,7 +395,7 @@ export default {
       return env.ROOM.get(env.ROOM.idFromName(live[1])).fetch(request);
     }
     try {
-      const file = /^\/v\/([\w-]{11})\.(gcast|jpg|vtt)$/.exec(url.pathname);
+      const file = /^\/v\/([\w-]{11}(?:-\d{2,4})?)\.(gcast|jpg|vtt)$/.exec(url.pathname);
       if (file && (request.method === 'GET' || request.method === 'HEAD')) return serveFile(request, env, `${file[1]}.${file[2]}`);
       if (url.pathname === '/upload' && request.method === 'POST') return publish(request, env, url);
       if (url.pathname.startsWith('/admin/')) {
@@ -394,6 +412,8 @@ export default {
       if (finish && request.method === 'POST') return partFinish(request, env, finish[1], url);
       const image = /^\/poster\/([\w-]{11})$/.exec(url.pathname);
       if (image && request.method === 'POST') return poster(request, env, image[1]);
+      const extra = /^\/variant\/([\w-]{11})$/.exec(url.pathname);
+      if (extra && request.method === 'POST') return variant(request, env, extra[1], url);
       const captions = /^\/subtitles\/([\w-]{11})$/.exec(url.pathname);
       if (captions && request.method === 'POST') return subtitles(request, env, captions[1]);
       if (url.pathname === '/') return json({ hub: env.REPO, files: '/v/<id>.gcast', upload: 'POST /upload?title=&license=&listed=1 with x-hub-key' });

@@ -16,7 +16,7 @@ glyph-player::part(canvas) { object-fit: contain; }
 </head>
 <body>
 <script type="module">
-import 'https://cdn.jsdelivr.net/npm/glyphcast@0.18.1/dist/element.js/+esm';
+import 'https://cdn.jsdelivr.net/npm/glyphcast@0.19.1/dist/element.js/+esm';
 
 const key = new URLSearchParams(location.search).get('v') ?? '';
 const [config, videos] = await Promise.all([fetch('./hub.json').then((response) => response.json()), fetch('./videos.json', { cache: 'no-cache' }).then((response) => response.json()).catch(() => [])]);
@@ -27,6 +27,7 @@ if (!/^[\w-]{11}$/.test(id)) {
 } else {
   const player = document.createElement('glyph-player');
   player.setAttribute('src', `${config.files}/v/${id}.gcast`);
+  if (video?.variants?.length) player.setAttribute('sources', JSON.stringify([{ cols: video.cols, src: `${config.files}/v/${id}.gcast` }, ...video.variants.map((cols) => ({ cols, src: `${config.files}/v/${id}-${cols}.gcast` }))]));
   if (video?.poster) player.setAttribute('poster', `${config.files}/v/${id}.jpg`);
   if (video?.subtitles) player.setAttribute('subtitles', `${config.files}/v/${id}.vtt`);
   player.setAttribute('mode', 'braille');
