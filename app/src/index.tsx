@@ -211,6 +211,7 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
             {clock(video.duration)} · {video.cols}×{video.rows} символов · {megabytes(video.size)}
             {video.listed ? '' : ' · не в общем списке'}
           </div>
+          {video.description && <p className="description">{video.description}</p>}
           {video.source && (
             <div>
               Оригинал:{' '}
@@ -238,6 +239,7 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
   const [title, setTitle] = useState('');
   const [license, setLicense] = useState('own');
   const [source, setSource] = useState('');
+  const [description, setDescription] = useState('');
   const [share, setShare] = useState<number | null>(null);
   const [status, setStatus] = useState('');
   const send = async () => {
@@ -247,6 +249,7 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
     try {
       const query = new URLSearchParams({ title: title.trim(), license, listed: license === 'own' ? '0' : '1' });
       if (source.trim()) query.set('source', source.trim());
+      if (description.trim()) query.set('description', description.trim().slice(0, 1500));
       const entry = await upload(file, query, {}, setShare);
       const who = { token: entry.token ?? '' };
       const files = await worker();
@@ -296,6 +299,10 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
               </option>
             ))}
           </select>
+        </label>
+        <label className="field">
+          Описание (необязательно)
+          <textarea rows={4} maxLength={1500} value={description} onChange={(event) => setDescription(event.target.value)} />
         </label>
         <label className="field">
           Ссылка на оригинал (необязательно)

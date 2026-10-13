@@ -11,13 +11,6 @@ interface Broadcast {
 /** Turns the camera or the screen into glyphs in the browser and sends them to viewers of a room. */
 export const Live = ({ files, close }: { files: string; close: () => void }) => {
   const [room, setRoom] = useState('live');
-  const [key, setKey] = useState(() => {
-    try {
-      return localStorage.getItem('gcast-hub-key') ?? '';
-    } catch {
-      return '';
-    }
-  });
   const [status, setStatus] = useState('');
   const [link, setLink] = useState('');
   const current = useRef<Broadcast | null>(null);
@@ -38,9 +31,17 @@ export const Live = ({ files, close }: { files: string; close: () => void }) => 
       setStatus('Название: латинские буквы, цифры, дефис, до 40 символов.');
       return;
     }
+    // a secret of this browser: while the broadcast runs, nobody else can take the room
+    let token = '';
     try {
-      localStorage.setItem('gcast-hub-key', key);
-    } catch {}
+      token = localStorage.getItem('gcast-live-token') ?? '';
+      if (!token) {
+        token = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+        localStorage.setItem('gcast-live-token', token);
+      }
+    } catch {
+      token = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
     try {
       const media = screen ? await navigator.mediaDevices.getDisplayMedia({ video: true }) : await navigator.mediaDevices.getUserMedia({ video: true });
       const video = document.createElement('video');
@@ -53,11 +54,11 @@ export const Live = ({ files, close }: { files: string; close: () => void }) => 
       const rows = Math.max(1, Math.round(cols * (video.videoHeight / video.videoWidth) * 0.6));
       const canvas = new OffscreenCanvas(cols, rows);
       const context = canvas.getContext('2d', { willReadFrequently: true });
-      const socket = new WebSocket(`${files.replace(/^http/, 'ws')}/live/${room}/broadcast?key=${encodeURIComponent(key)}`);
+      const socket = new WebSocket(`${files.replace(/^http/, 'ws')}/live/${room}/broadcast?token=${token}`);
       socket.binaryType = 'arraybuffer';
       await new Promise((resolve, reject) => {
         socket.addEventListener('open', resolve, { once: true });
-        socket.addEventListener('error', () => reject(new Error('сервер не принял трансляцию, проверьте ключ')), { once: true });
+        socket.addEventListener('error', () => reject(new Error('в этой комнате уже идёт чужой эфир, выберите другое название')), { once: true });
       });
       const encoder = new Encoder({ cols, rows, fps, chunkFrames: fps }, (bytes) => socket.readyState === 1 && socket.send(bytes));
       const timer = setInterval(() => {
@@ -83,10 +84,6 @@ export const Live = ({ files, close }: { files: string; close: () => void }) => 
         <label className="field">
           Название эфира
           <input value={room} onChange={(event) => setRoom(event.target.value)} />
-        </label>
-        <label className="field">
-          Ключ хаба
-          <input type="password" value={key} onChange={(event) => setKey(event.target.value)} />
         </label>
         <div className="row">
           <button type="button" className="button primary" onClick={() => void start(false)}>

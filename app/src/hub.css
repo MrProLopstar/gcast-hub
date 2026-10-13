@@ -98,3 +98,15 @@ main { padding: 24px; padding-block-end: 64px; }
 .ambient > canvas.lit { opacity: 0.45; }
 @media (prefers-reduced-motion: reduce) { .ambient > canvas { transition: none; } }
 .watch, main { overflow-x: clip; }
+
+.description { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.field textarea, .item textarea { padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; resize: vertical; width: 100%; }
+
+/* thin dark scrollbars that match the page */
+* { scrollbar-width: thin; scrollbar-color: #3a3f47 transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3a3f47; border-radius: 999px; border: 3px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: #50565f; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

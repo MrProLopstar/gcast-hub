@@ -16,6 +16,7 @@ export interface Video {
   readonly subtitles?: boolean;
   readonly variants?: readonly number[];
   readonly source?: string;
+  readonly description?: string;
   readonly orphan?: boolean;
   readonly files?: number;
   readonly stats?: Stats;

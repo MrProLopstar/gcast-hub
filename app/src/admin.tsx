@@ -28,15 +28,16 @@ const PAGE = 40;
 const Item = ({ video, files, who, reload, say, watch }: { video: Video; files: string; who: Credentials; reload: () => void; say: (text: string) => void; watch: (video: Video) => void }) => {
   const [title, setTitle] = useState(video.title);
   const [source, setSource] = useState(video.source ?? '');
+  const [description, setDescription] = useState(video.description ?? '');
   const [license, setLicense] = useState(video.license);
   const [listed, setListed] = useState(video.listed);
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const changed = title !== video.title || source !== (video.source ?? '') || license !== video.license || listed !== video.listed;
+  const changed = title !== video.title || description !== (video.description ?? '') || source !== (video.source ?? '') || license !== video.license || listed !== video.listed;
   const save = async (override?: Partial<{ listed: boolean }>) => {
     setBusy(true);
     try {
-      const saved = await call<Video>(`/admin/videos/${video.id}`, who, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, source, license, listed, ...override }) });
+      const saved = await call<Video>(`/admin/videos/${video.id}`, who, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, description, source, license, listed, ...override }) });
       say(`Сохранено: «${saved.title}»`);
       reload();
     } catch (error) {
@@ -71,6 +72,7 @@ const Item = ({ video, files, who, reload, say, watch }: { video: Video; files: 
       </button>
       <div className="fields">
         <input className="title" value={title} placeholder="Без названия" aria-label="Название" onChange={(event) => setTitle(event.target.value)} />
+        <textarea rows={2} value={description} placeholder="Описание" aria-label="Описание" onChange={(event) => setDescription(event.target.value)} />
         <input value={source} placeholder="Ссылка на оригинал" aria-label="Ссылка на оригинал" onChange={(event) => setSource(event.target.value)} />
         <div className="facts">
           {video.orphan ? <span className="pill warn">без записи</span> : video.listed ? <span className="pill good">в списке</span> : <span className="pill">по ссылке</span>}
@@ -289,7 +291,7 @@ const Admin = () => {
         <div className="items">
           {shown.length === 0 && <p className="empty">Ничего не нашлось.</p>}
           {shown.slice(page * PAGE, (page + 1) * PAGE).map((video) => (
-            <Item key={`${video.id}-${video.title}-${video.listed}-${video.license}-${video.source ?? ''}`} video={video} files={files} who={who} reload={() => void load()} say={setStatus} watch={setWatching} />
+            <Item key={`${video.id}-${video.title}-${video.listed}-${video.license}-${video.source ?? ''}-${video.description ?? ''}`} video={video} files={files} who={who} reload={() => void load()} say={setStatus} watch={setWatching} />
           ))}
         </div>
         {pages > 1 && (

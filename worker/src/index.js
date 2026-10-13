@@ -232,11 +232,12 @@ const fields = (url, admin) => {
   const license = url.searchParams.get('license') ?? 'own';
   const wanted = url.searchParams.get('listed') === '1';
   const source = cleanSource(url.searchParams.get('source'));
+  const description = (url.searchParams.get('description') ?? '').trim().slice(0, 5000);
   if (!title) return { error: 'A title is needed' };
   if (!LICENSES.includes(license)) return { error: `License must be one of ${LICENSES.join(', ')}` };
   if (wanted && license === 'own' && !admin) return { error: 'Only openly licensed videos can be listed; choose a license or keep it unlisted' };
   // without the hub key a video waits for review before it reaches the open list
-  return { title, license, listed: wanted && admin, ...(wanted && !admin ? { review: true } : {}), ...(source ? { source } : {}) };
+  return { title, license, listed: wanted && admin, ...(wanted && !admin ? { review: true } : {}), ...(source ? { source } : {}), ...(description ? { description } : {}) };
 };
 
 const hidden = (env) => env.INDEX.get(env.INDEX.idFromName('unlisted'));
@@ -290,6 +291,11 @@ const adminUpdate = async (request, env, id) => {
   const next = { ...entry, title, license, listed: wantsListed, slug: entry.listed === wantsListed && entry.title === title ? entry.slug : slugify(title) || id };
   if (source) next.source = source;
   else delete next.source;
+  if (typeof change.description === 'string') {
+    const description = change.description.trim().slice(0, 5000);
+    if (description) next.description = description;
+    else delete next.description;
+  }
   if (wantsListed) delete next.review;
   await catalog(env, (videos) => {
     const others = videos.filter((video) => video.id !== id);
@@ -655,7 +661,8 @@ const serveFile = async (request, env, ctx, name) => {
 };
 
 export class Room {
-  constructor() {
+  constructor(state, env) {
+    this.env = env;
     this.header = null;
     this.latest = null;
     this.viewers = new Set();
@@ -663,6 +670,12 @@ export class Room {
 
   async fetch(request) {
     if (request.headers.get('upgrade') === 'websocket') {
+      // anyone may start a broadcast; while one runs, only its own browser (the same token) or the admin may replace it
+      const url = new URL(request.url);
+      const owner = (url.searchParams.get('token') ?? '').slice(0, 64);
+      const admin = Boolean(this.env?.HUB_KEY) && url.searchParams.get('key') === this.env.HUB_KEY;
+      if (this.socket && this.owner && owner !== this.owner && !admin) return json({ error: 'Someone is already streaming in this room; pick another name' }, 409);
+      this.owner = owner;
       const [client, server] = Object.values(new WebSocketPair());
       server.accept();
       try {
@@ -729,7 +742,6 @@ export default {
     const url = new URL(request.url);
     const live = /^\/live\/([\w-]{1,40})(\.gcast|\/broadcast)$/.exec(url.pathname);
     if (live) {
-      if (live[2] === '/broadcast' && (!env.HUB_KEY || url.searchParams.get('key') !== env.HUB_KEY)) return json({ error: 'Wrong upload key' }, 403);
       return env.ROOM.get(env.ROOM.idFromName(live[1])).fetch(request);
     }
     try {
