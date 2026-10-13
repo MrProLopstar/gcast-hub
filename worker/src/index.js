@@ -223,20 +223,32 @@ const stitched = async (request, env, id) => {
   if (wanted) headers['content-range'] = `bytes ${start}-${end}/${total}`;
   if (request.method === 'HEAD') return new Response(null, { status: wanted ? 206 : 200, headers });
   const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
   const pump = async () => {
     let offset = 0;
     for (let index = 0; index < sizes.length; index += 1) {
       const from = Math.max(start, offset);
       const to = Math.min(end, offset + sizes[index] - 1);
       if (from <= to) {
-        const part = await asset(env, `${id}.gcast.${index}`, `bytes=${from - offset}-${to - offset}`);
-        await part.body.pipeTo(writable, { preventClose: true });
+        // GitHub sometimes ends a response early without an error, so keep asking for the rest of the range
+        for (let at = from, tries = 0; at <= to; ) {
+          if ((tries += 1) > 8) throw new Error(`Part ${index} keeps breaking off`);
+          const part = await asset(env, `${id}.gcast.${index}`, `bytes=${at - offset}-${to - offset}`);
+          if (part.status !== 206 || !part.body) throw new Error(`Part ${index}: HTTP ${part.status}`);
+          const reader = part.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read().catch(() => ({ done: true }));
+            if (done) break;
+            await writer.write(value);
+            at += value.length;
+          }
+        }
       }
       offset += sizes[index];
     }
-    await writable.close();
+    await writer.close();
   };
-  pump().catch((error) => writable.abort(error));
+  pump().catch((error) => writer.abort(error).catch(() => undefined));
   return new Response(readable, { status: wanted ? 206 : 200, headers });
 };
 

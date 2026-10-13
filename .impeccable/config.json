@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "admin.html"
+        ],
+        "createdAt": "2026-10-13T15:28:57.852Z",
+        "reason": "Claude: only candidate is .tag, a 12px pill label (1px 7px) — compact by design; table cells and inputs have 6-10px"
+      }
+    ]
+  }
+}
