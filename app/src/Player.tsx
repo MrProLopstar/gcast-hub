@@ -2,7 +2,8 @@ import 'glyphcast/element';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 
 type Attributes = Partial<Record<'src' | 'sources' | 'poster' | 'subtitles' | 'heading' | 'source' | 'mode' | 'cols' | 'autoplay' | 'muted' | 'fullsize', string>>;
-const NAMES = ['src', 'sources', 'poster', 'subtitles', 'heading', 'source', 'mode', 'cols', 'autoplay', 'muted', 'fullsize'] as const;
+// src and sources go last: setting them starts loading, which reads the poster and the rest
+const NAMES = ['poster', 'subtitles', 'heading', 'source', 'mode', 'cols', 'autoplay', 'muted', 'fullsize', 'sources', 'src'] as const;
 
 declare module 'react' {
   // eslint-disable-next-line @typescript-eslint/no-namespace
