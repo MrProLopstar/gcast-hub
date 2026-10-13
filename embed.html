@@ -16,7 +16,7 @@ glyph-player::part(canvas) { object-fit: contain; }
 </head>
 <body>
 <script type="module">
-import 'https://cdn.jsdelivr.net/npm/glyphcast@0.14/dist/element.js/+esm';
+import 'https://cdn.jsdelivr.net/npm/glyphcast@0.16/dist/element.js/+esm';
 
 const key = new URLSearchParams(location.search).get('v') ?? '';
 const [config, videos] = await Promise.all([fetch('./hub.json').then((response) => response.json()), fetch('./videos.json', { cache: 'no-cache' }).then((response) => response.json()).catch(() => [])]);
