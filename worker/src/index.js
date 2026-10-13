@@ -57,6 +57,96 @@ const describe = (head) => {
 
 const slugify = (text) => text.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 60);
 
+const PART = 90 * 1048576;
+const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(11)), (byte) => ALPHABET[byte % ALPHABET.length]).join('');
+const allowed = (request, env) => Boolean(env.HUB_KEY) && request.headers.get('x-hub-key') === env.HUB_KEY;
+
+const asset = (env, name, range) =>
+  fetch(`https://github.com/${env.REPO}/releases/download/${TAG}/${encodeURIComponent(name)}`, {
+    headers: { 'user-agent': 'gcast-hub', ...(range ? { range } : {}) },
+    redirect: 'follow',
+    cf: { cacheEverything: true, cacheTtl: 86400 },
+  });
+
+const fields = (url) => {
+  const title = (url.searchParams.get('title') ?? '').trim().slice(0, 120);
+  const license = url.searchParams.get('license') ?? 'own';
+  const listed = url.searchParams.get('listed') === '1';
+  if (!title) return { error: 'A title is needed' };
+  if (!LICENSES.includes(license)) return { error: `License must be one of ${LICENSES.join(', ')}` };
+  if (listed && license === 'own') return { error: 'Only openly licensed videos can be listed; choose a license or keep it unlisted' };
+  return { title, license, listed };
+};
+
+const remember = async (env, entry) => {
+  if (entry.listed) await catalog(env, (videos) => {
+    const taken = new Set(videos.map((video) => video.slug));
+    if (taken.has(entry.slug)) entry.slug = `${entry.slug}-${entry.id.slice(0, 4)}`;
+    return [entry, ...videos];
+  });
+  return json(entry, 201);
+};
+
+const partUpload = async (request, env, id, index) => {
+  if (!allowed(request, env)) return json({ error: 'Wrong upload key' }, 403);
+  const size = Number(request.headers.get('content-length') ?? 0);
+  if (!size || size > PART) return json({ error: `A part must be from 1 byte to ${PART} bytes` }, 400);
+  await upload(env, `${id}.gcast.${index}`, request.body, 'application/octet-stream', size);
+  return json({ ok: true });
+};
+
+const partFinish = async (request, env, id, url) => {
+  if (!allowed(request, env)) return json({ error: 'Wrong upload key' }, 403);
+  const given = fields(url);
+  if (given.error) return json(given, 400);
+  const sizes = (url.searchParams.get('sizes') ?? '').split(',').map(Number).filter((size) => size > 0);
+  if (sizes.length === 0) return json({ error: 'Part sizes are needed' }, 400);
+  const head = await asset(env, `${id}.gcast.0`, 'bytes=0-19');
+  if (!head.ok) return json({ error: 'The first part is missing' }, 400);
+  const info = describe(new Uint8Array(await head.arrayBuffer()));
+  const manifest = new TextEncoder().encode(JSON.stringify({ sizes }));
+  await upload(env, `${id}.parts`, new Blob([manifest]).stream(), 'application/json', manifest.length);
+  const size = sizes.reduce((sum, part) => sum + part, 0);
+  return remember(env, { id, slug: slugify(given.title) || id, ...given, size, ...info, poster: false, added: new Date().toISOString().slice(0, 10) });
+};
+
+const stitched = async (request, env, id) => {
+  const manifest = await asset(env, `${id}.parts`);
+  if (!manifest.ok) return null;
+  const { sizes } = await manifest.json();
+  const total = sizes.reduce((sum, part) => sum + part, 0);
+  const wanted = /bytes=(\d*)-(\d*)/.exec(request.headers.get('range') ?? '');
+  let start = 0;
+  let end = total - 1;
+  if (wanted) {
+    if (!wanted[1] && wanted[2]) start = Math.max(0, total - Number(wanted[2]));
+    else {
+      start = Number(wanted[1] || 0);
+      if (wanted[2]) end = Math.min(total - 1, Number(wanted[2]));
+    }
+    if (start >= total || start > end) return new Response(null, { status: 416, headers: { ...CORS, 'content-range': `bytes */${total}` } });
+  }
+  const headers = { ...CORS, 'content-type': 'application/octet-stream', 'accept-ranges': 'bytes', 'content-length': String(end - start + 1), 'cache-control': 'public, max-age=86400' };
+  if (wanted) headers['content-range'] = `bytes ${start}-${end}/${total}`;
+  if (request.method === 'HEAD') return new Response(null, { status: wanted ? 206 : 200, headers });
+  const { readable, writable } = new TransformStream();
+  const pump = async () => {
+    let offset = 0;
+    for (let index = 0; index < sizes.length; index += 1) {
+      const from = Math.max(start, offset);
+      const to = Math.min(end, offset + sizes[index] - 1);
+      if (from <= to) {
+        const part = await asset(env, `${id}.gcast.${index}`, `bytes=${from - offset}-${to - offset}`);
+        await part.body.pipeTo(writable, { preventClose: true });
+      }
+      offset += sizes[index];
+    }
+    await writable.close();
+  };
+  pump().catch((error) => writable.abort(error));
+  return new Response(readable, { status: wanted ? 206 : 200, headers });
+};
+
 const publish = async (request, env, url) => {
   if (!env.HUB_KEY || request.headers.get('x-hub-key') !== env.HUB_KEY) return json({ error: 'Wrong upload key' }, 403);
   const title = (url.searchParams.get('title') ?? '').trim().slice(0, 120);
@@ -104,6 +194,10 @@ const serveFile = async (request, env, name) => {
   const range = request.headers.get('range');
   if (range) headers.set('range', range);
   const upstream = await fetch(`https://github.com/${env.REPO}/releases/download/${TAG}/${encodeURIComponent(name)}`, { headers, redirect: 'follow', cf: { cacheEverything: true, cacheTtl: 86400 } });
+  if (upstream.status === 404 && name.endsWith('.gcast')) {
+    const parts = await stitched(request, env, name.slice(0, -6));
+    if (parts) return parts;
+  }
   const out = new Headers(CORS);
   for (const key of ['content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
     const value = upstream.headers.get(key);
@@ -196,6 +290,11 @@ export default {
       const file = /^\/v\/([\w-]{11})\.(gcast|jpg|vtt)$/.exec(url.pathname);
       if (file && (request.method === 'GET' || request.method === 'HEAD')) return serveFile(request, env, `${file[1]}.${file[2]}`);
       if (url.pathname === '/upload' && request.method === 'POST') return publish(request, env, url);
+      if (url.pathname === '/parts/start' && request.method === 'POST') return allowed(request, env) ? json({ id: newId(), part: PART }) : json({ error: 'Wrong upload key' }, 403);
+      const part = /^\/parts\/([\w-]{11})\/(\d{1,4})$/.exec(url.pathname);
+      if (part && request.method === 'POST') return partUpload(request, env, part[1], Number(part[2]));
+      const finish = /^\/parts\/([\w-]{11})\/finish$/.exec(url.pathname);
+      if (finish && request.method === 'POST') return partFinish(request, env, finish[1], url);
       const image = /^\/poster\/([\w-]{11})$/.exec(url.pathname);
       if (image && request.method === 'POST') return poster(request, env, image[1]);
       const captions = /^\/subtitles\/([\w-]{11})$/.exec(url.pathname);

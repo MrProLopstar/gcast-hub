@@ -90,7 +90,7 @@ pre { font-family: var(--mono); background: var(--panel); border: 1px solid var(
 
   <section class="panel" id="upload">
     <h2>Загрузить</h2>
-    <p class="status">Готовый <code>.gcast</code> до 100 МБ. Видео сделайте в <a href="https://mrprolopstar.github.io/glyphcast/">конвертере</a> или командой <code>npx glyphcast encode видео.mp4 --embed --poster</code>. В общий список попадают видео со свободной лицензией, остальные открываются по ссылке.</p>
+    <p class="status">Готовый <code>.gcast</code>, большие файлы загружаются частями. Видео сделайте в <a href="https://mrprolopstar.github.io/glyphcast/">конвертере</a> или командой <code>npx glyphcast encode видео.mp4 --embed --poster</code>. В общий список попадают видео со свободной лицензией, остальные открываются по ссылке.</p>
     <div class="row">
       <label class="button">Файл .gcast<input id="file" type="file" accept=".gcast" hidden></label>
       <label class="button">Постер .jpg<input id="poster" type="file" accept="image/jpeg" hidden></label>
@@ -290,10 +290,6 @@ const send = (url, body, progress) =>
 $('send').addEventListener('click', async () => {
   const file = $('file').files?.[0];
   if (!file) return;
-  if (file.size > 100 * 1048576) {
-    $('status').textContent = 'Файл больше 100 МБ, его через сайт не загрузить.';
-    return;
-  }
   try {
     localStorage.setItem('gcast-hub-key', $('key').value);
   } catch {}
@@ -303,10 +299,23 @@ $('send').addEventListener('click', async () => {
   $('send').disabled = true;
   bar.hidden = false;
   try {
-    const entry = await send(`${WORKER}/upload?${query}`, file, (share) => {
+    const show = (share) => {
       bar.firstElementChild.style.width = `${(share * 100).toFixed(1)}%`;
       $('status').textContent = `Загрузка: ${Math.round(share * 100)}%`;
-    });
+    };
+    let entry;
+    if (file.size <= 95 * 1048576) entry = await send(`${WORKER}/upload?${query}`, file, show);
+    else {
+      const { id, part } = await send(`${WORKER}/parts/start`, null);
+      const sizes = [];
+      for (let offset = 0, index = 0; offset < file.size; offset += part, index += 1) {
+        const piece = file.slice(offset, offset + part);
+        await send(`${WORKER}/parts/${id}/${index}`, piece, (share) => show((offset + share * piece.size) / file.size));
+        sizes.push(piece.size);
+      }
+      query.set('sizes', sizes.join(','));
+      entry = await send(`${WORKER}/parts/${id}/finish?${query}`, null);
+    }
     const image = $('poster').files?.[0];
     if (image) await send(`${WORKER}/poster/${entry.id}`, image);
     const captions = $('captions').files?.[0];
