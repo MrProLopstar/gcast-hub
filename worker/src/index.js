@@ -78,14 +78,107 @@ const fields = (url) => {
   return { title, license, listed };
 };
 
+const hidden = (env) => env.INDEX.get(env.INDEX.idFromName('unlisted'));
+
+const keepHidden = (env, entry) => hidden(env).fetch('https://index/put', { method: 'POST', body: JSON.stringify(entry) });
+
 const remember = async (env, entry) => {
   if (entry.listed) await catalog(env, (videos) => {
     const taken = new Set(videos.map((video) => video.slug));
     if (taken.has(entry.slug)) entry.slug = `${entry.slug}-${entry.id.slice(0, 4)}`;
     return [entry, ...videos];
   });
+  else await keepHidden(env, entry);
   return json(entry, 201);
 };
+
+const readCatalog = async (env) => {
+  const current = await github(env, '/contents/videos.json');
+  if (!current.ok) return [];
+  const file = await current.json();
+  return JSON.parse(decodeURIComponent(escape(atob(file.content.replace(/\n/g, '')))));
+};
+
+const adminList = async (env) => {
+  const [listed, unlisted, assets] = await Promise.all([
+    readCatalog(env),
+    hidden(env).fetch('https://index/list').then((response) => response.json()),
+    release(env).then((found) => found.assets ?? []),
+  ]);
+  const known = new Set([...listed, ...unlisted].map((video) => video.id));
+  const files = new Map();
+  for (const item of assets) {
+    const id = item.name.slice(0, 11);
+    files.set(id, (files.get(id) ?? 0) + (/\.gcast(\.\d+)?$/.test(item.name) ? item.size : 0));
+  }
+  const orphans = [...files].filter(([id, size]) => !known.has(id) && size > 0).map(([id, size]) => ({ id, slug: id, title: '', license: 'own', listed: false, size, orphan: true }));
+  return json({ videos: [...listed, ...unlisted, ...orphans].map((video) => ({ ...video, files: files.get(video.id) ?? 0 })) });
+};
+
+const adminUpdate = async (request, env, id) => {
+  const change = await request.json();
+  const listed = await readCatalog(env);
+  const unlisted = await hidden(env).fetch('https://index/list').then((response) => response.json());
+  let entry = listed.find((video) => video.id === id) ?? unlisted.find((video) => video.id === id);
+  if (!entry) {
+    const head = await asset(env, `${id}.gcast`, 'bytes=0-19');
+    const first = head.ok ? head : await asset(env, `${id}.gcast.0`, 'bytes=0-19');
+    if (!first.ok) return json({ error: 'No such video' }, 404);
+    entry = { id, slug: id, title: id, license: 'own', listed: false, size: 0, ...describe(new Uint8Array(await first.arrayBuffer())), poster: false, added: new Date().toISOString().slice(0, 10) };
+  }
+  const title = typeof change.title === 'string' && change.title.trim() ? change.title.trim().slice(0, 120) : entry.title;
+  const license = typeof change.license === 'string' && LICENSES.includes(change.license) ? change.license : entry.license;
+  const wantsListed = typeof change.listed === 'boolean' ? change.listed : entry.listed;
+  if (wantsListed && license === 'own') return json({ error: 'Only openly licensed videos can be listed' }, 400);
+  const next = { ...entry, title, license, listed: wantsListed, slug: entry.listed === wantsListed && entry.title === title ? entry.slug : slugify(title) || id };
+  await catalog(env, (videos) => {
+    const others = videos.filter((video) => video.id !== id);
+    if (!wantsListed) return others;
+    const taken = new Set(others.map((video) => video.slug));
+    if (taken.has(next.slug)) next.slug = `${next.slug}-${id.slice(0, 4)}`;
+    const at = videos.findIndex((video) => video.id === id);
+    if (at < 0) return [next, ...others];
+    return videos.map((video) => (video.id === id ? next : video));
+  });
+  if (wantsListed) await hidden(env).fetch(`https://index/delete?id=${id}`, { method: 'POST' });
+  else await keepHidden(env, next);
+  return json(next);
+};
+
+const adminDelete = async (env, id) => {
+  const found = await release(env);
+  for (const item of found.assets ?? []) if (item.name.startsWith(`${id}.`)) await github(env, `/releases/assets/${item.id}`, { method: 'DELETE' });
+  await catalog(env, (videos) => videos.filter((video) => video.id !== id));
+  await hidden(env).fetch(`https://index/delete?id=${id}`, { method: 'POST' });
+  return json({ ok: true });
+};
+
+export class Index {
+  constructor(state) {
+    this.storage = state.storage;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === '/list') return Response.json([...(await this.storage.list({ prefix: 'video:' })).values()]);
+    if (url.pathname === '/put') {
+      const entry = await request.json();
+      await this.storage.put(`video:${entry.id}`, entry);
+      return Response.json({ ok: true });
+    }
+    if (url.pathname === '/patch') {
+      const key = `video:${url.searchParams.get('id')}`;
+      const entry = await this.storage.get(key);
+      if (entry) await this.storage.put(key, { ...entry, ...(await request.json()) });
+      return Response.json({ ok: true });
+    }
+    if (url.pathname === '/delete') {
+      await this.storage.delete(`video:${url.searchParams.get('id')}`);
+      return Response.json({ ok: true });
+    }
+    return new Response('Not found', { status: 404 });
+  }
+}
 
 const partUpload = async (request, env, id, index) => {
   if (!allowed(request, env)) return json({ error: 'Wrong upload key' }, 403);
@@ -165,18 +258,14 @@ const publish = async (request, env, url) => {
   const id = Array.from(crypto.getRandomValues(new Uint8Array(11)), (byte) => ALPHABET[byte % ALPHABET.length]).join('');
   await upload(env, `${id}.gcast`, body, 'application/octet-stream', size);
   const entry = { id, slug: slugify(title) || id, title, license, listed, size, ...info, poster: false, added: new Date().toISOString().slice(0, 10) };
-  if (listed) await catalog(env, (videos) => {
-    const taken = new Set(videos.map((video) => video.slug));
-    if (taken.has(entry.slug)) entry.slug = `${entry.slug}-${id.slice(0, 4)}`;
-    return [entry, ...videos];
-  });
-  return json(entry, 201);
+  return remember(env, entry);
 };
 
 const poster = async (request, env, id) => {
   if (!env.HUB_KEY || request.headers.get('x-hub-key') !== env.HUB_KEY) return json({ error: 'Wrong upload key' }, 403);
   await upload(env, `${id}.jpg`, request.body, 'image/jpeg', Number(request.headers.get('content-length') ?? 0));
   await catalog(env, (videos) => videos.map((video) => (video.id === id ? { ...video, poster: true } : video)));
+  await hidden(env).fetch(`https://index/patch?id=${id}`, { method: 'POST', body: JSON.stringify({ poster: true }) });
   return json({ ok: true });
 };
 
@@ -184,6 +273,7 @@ const subtitles = async (request, env, id) => {
   if (!env.HUB_KEY || request.headers.get('x-hub-key') !== env.HUB_KEY) return json({ error: 'Wrong upload key' }, 403);
   await upload(env, `${id}.vtt`, request.body, 'text/vtt; charset=utf-8', Number(request.headers.get('content-length') ?? 0));
   await catalog(env, (videos) => videos.map((video) => (video.id === id ? { ...video, subtitles: true } : video)));
+  await hidden(env).fetch(`https://index/patch?id=${id}`, { method: 'POST', body: JSON.stringify({ subtitles: true }) });
   return json({ ok: true });
 };
 
@@ -290,6 +380,13 @@ export default {
       const file = /^\/v\/([\w-]{11})\.(gcast|jpg|vtt)$/.exec(url.pathname);
       if (file && (request.method === 'GET' || request.method === 'HEAD')) return serveFile(request, env, `${file[1]}.${file[2]}`);
       if (url.pathname === '/upload' && request.method === 'POST') return publish(request, env, url);
+      if (url.pathname.startsWith('/admin/')) {
+        if (!allowed(request, env)) return json({ error: 'Wrong upload key' }, 403);
+        if (url.pathname === '/admin/videos' && request.method === 'GET') return adminList(env);
+        const target = /^\/admin\/videos\/([\w-]{11})(\/delete)?$/.exec(url.pathname);
+        if (target && request.method === 'POST') return target[2] ? adminDelete(env, target[1]) : adminUpdate(request, env, target[1]);
+        return json({ error: 'Not found' }, 404);
+      }
       if (url.pathname === '/parts/start' && request.method === 'POST') return allowed(request, env) ? json({ id: newId(), part: PART }) : json({ error: 'Wrong upload key' }, 403);
       const part = /^\/parts\/([\w-]{11})\/(\d{1,4})$/.exec(url.pathname);
       if (part && request.method === 'POST') return partUpload(request, env, part[1], Number(part[2]));
