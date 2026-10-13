@@ -110,3 +110,18 @@ main { padding: 24px; padding-block-end: 64px; }
 ::-webkit-scrollbar-thumb:hover { background: #50565f; }
 html { scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* upload: drop areas instead of the browser's file buttons, two columns on wide screens */
+.panel.upload { width: min(720px, 100%); grid-template-columns: 1fr 1fr; column-gap: 16px; }
+.panel.upload > * { grid-column: 1 / -1; }
+.panel.upload > .field:has(input:not([type="url"])), .panel.upload > .field:has(select) { grid-column: auto; }
+.pick { position: relative; display: grid; gap: 2px; place-content: center; text-align: center; min-height: 76px; padding: 14px; border: 1.5px dashed var(--line); border-radius: 12px; background: var(--bg); cursor: pointer; transition: border-color 0.15s, background-color 0.15s; }
+.pick.big { min-height: 120px; }
+.pick:hover, .pick.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+.pick.chosen { border-style: solid; border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.pick strong { font-weight: 600; overflow-wrap: anywhere; }
+.pick span { color: var(--muted); font-size: 13px; }
+.pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 640px) { .panel.upload, .pair { grid-template-columns: 1fr; } .panel.upload > * { grid-column: 1 / -1 !important; } }

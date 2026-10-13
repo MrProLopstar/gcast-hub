@@ -234,6 +234,30 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
   );
 };
 
+/** A file picker that looks like the rest of the page: a drop area with the chosen name, drag and drop included. */
+const Pick = ({ label, hint, accept, file, onPick, big }: { label: string; hint: string; accept: string; file: File | null; onPick: (file: File | null) => void; big?: boolean }) => {
+  const [over, setOver] = useState(false);
+  return (
+    <label
+      className={`pick${big ? ' big' : ''}${over ? ' over' : ''}${file ? ' chosen' : ''}`}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        onPick(event.dataTransfer.files[0] ?? null);
+      }}
+    >
+      <input type="file" accept={accept} onChange={(event) => onPick(event.target.files?.[0] ?? null)} />
+      <strong>{file ? file.name : label}</strong>
+      <span>{file ? megabytes(file.size) : hint}</span>
+    </label>
+  );
+};
+
 const Upload = ({ close, done }: { close: () => void; done: (video: Video) => void }) => {
   const [file, setFile] = useState<File | null>(null);
   const [poster, setPoster] = useState<File | null>(null);
@@ -271,23 +295,22 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
   };
   return (
     <div className="dialog" role="dialog" aria-modal="true" aria-label="Загрузка видео" onClick={(event) => event.target === event.currentTarget && share === null && close()}>
-      <div className="panel">
+      <div className="panel upload">
         <h2>Загрузить видео</h2>
         <p className="note">
           Нужен готовый <code>.gcast</code>: сделайте его в <a href="https://gcast.1lop.ru/">конвертере</a> или командой <code>npx glyphcast encode видео.mp4 --detail --embed --poster</code>.
         </p>
-        <label className="field">
-          Файл .gcast
-          <input
-            type="file"
-            accept=".gcast"
-            onChange={(event) => {
-              const picked = event.target.files?.[0] ?? null;
-              setFile(picked);
-              if (picked && !title) setTitle(picked.name.replace(/\.gcast$/i, ''));
-            }}
-          />
-        </label>
+        <Pick
+          big
+          label="Выберите файл .gcast"
+          hint="или перетащите его сюда"
+          accept=".gcast"
+          file={file}
+          onPick={(picked) => {
+            setFile(picked);
+            if (picked && !title) setTitle(picked.name.replace(/\.gcast$/i, ''));
+          }}
+        />
         <label className="field">
           Название
           <input value={title} maxLength={120} onChange={(event) => setTitle(event.target.value)} />
@@ -310,15 +333,9 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
           Ссылка на оригинал (необязательно)
           <input type="url" value={source} placeholder="https://youtube.com/…" onChange={(event) => setSource(event.target.value)} />
         </label>
-        <div className="row">
-          <label className="field">
-            Постер .jpg
-            <input type="file" accept="image/jpeg" onChange={(event) => setPoster(event.target.files?.[0] ?? null)} />
-          </label>
-          <label className="field">
-            Субтитры .vtt
-            <input type="file" accept=".vtt" onChange={(event) => setCaptions(event.target.files?.[0] ?? null)} />
-          </label>
+        <div className="pair">
+          <Pick label="Постер" hint="картинка .jpg" accept="image/jpeg" file={poster} onPick={setPoster} />
+          <Pick label="Субтитры" hint="файл .vtt" accept=".vtt" file={captions} onPick={setCaptions} />
         </div>
         {share !== null && (
           <div className="progress" aria-label="Загрузка">
