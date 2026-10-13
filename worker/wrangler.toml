@@ -1,6 +1,7 @@
 name = "gcast-hub"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
+workers_dev = true
 
 
 [[durable_objects.bindings]]
@@ -18,3 +19,7 @@ new_sqlite_classes = ["Room"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["Index"]
+
+[[routes]]
+pattern = "glc-api.1lop.ru"
+custom_domain = true

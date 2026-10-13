@@ -38,10 +38,10 @@ const fileId = async (env, name) => {
 };
 
 /** Starts a resumable Drive upload and returns its session URL. */
-const session = async (env, name, type, size) => {
+const session = async (env, name, type, size, origin) => {
   const response = await drive(env, '/upload/drive/v3/files?uploadType=resumable&fields=id,size', {
     method: 'POST',
-    headers: { 'content-type': 'application/json; charset=utf-8', 'x-upload-content-type': type, ...(size ? { 'x-upload-content-length': String(size) } : {}) },
+    headers: { 'content-type': 'application/json; charset=utf-8', 'x-upload-content-type': type, ...(size ? { 'x-upload-content-length': String(size) } : {}), ...(origin ? { origin } : {}) },
     body: JSON.stringify({ name, parents: [env.DRIVE_FOLDER] }),
   });
   const url = response.headers.get('location');
@@ -225,6 +225,7 @@ const PART = 90 * 1048576;
 const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(11)), (byte) => ALPHABET[byte % ALPHABET.length]).join('');
 const allowed = (request, env) => Boolean(env.HUB_KEY) && request.headers.get('x-hub-key') === env.HUB_KEY;
 const PART_LIMIT = 30;
+const SMALL = 20 * 1048576;
 
 const fields = (url, admin) => {
   const title = (url.searchParams.get('title') ?? '').trim().slice(0, 120);
@@ -404,49 +405,110 @@ export class Index {
   }
 }
 
+/**
+ * Checks a .gcast that already sits on the Drive without reading all of it: the header, the index at the end and
+ * the framing of up to 24 chunks spread over the file, each read with a small range request. A file without an
+ * index gets its first chunks checked instead. Throws when the bytes are not a .gcast.
+ */
+const inspect = async (env, name, size) => {
+  const read = async (from, to) => {
+    const response = await asset(env, name, `bytes=${from}-${to}`);
+    if (response.status !== 206) throw new Error(`Cannot read the uploaded file: HTTP ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
+  };
+  const head = await read(0, 19);
+  const view = new DataView(head.buffer);
+  const cols = view.getUint16(6, true);
+  const rows = view.getUint16(8, true);
+  const fps = view.getFloat32(10, true);
+  if (view.getUint32(0, true) !== 0x54534347 || head[4] !== 3 || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
+  const chunkAt = async (offset) => {
+    if (offset + 6 > size) throw new Error('A chunk of this file points past its end');
+    const bytes = await read(offset, offset + 5);
+    const chunk = new DataView(bytes.buffer);
+    return { size: chunk.getUint32(0, true), frames: chunk.getUint16(4, true) };
+  };
+  const tail = new DataView((await read(size - 8, size - 1)).buffer);
+  if (size > 28 && tail.getUint32(4, true) === 0x58444947) {
+    const length = tail.getUint32(0, true);
+    if (length < 14 || length > size - 20 || length > 4 * 1048576) throw new Error('The index of this file is broken');
+    const index = await read(size - length, size - 1);
+    const at = new DataView(index.buffer);
+    if (at.getUint32(0, true) !== length - 6 || at.getUint16(4, true) !== 0xffff) throw new Error('The index of this file is broken');
+    const entries = [];
+    for (let place = 6; place + 16 <= length - 8; place += 16) entries.push({ offset: at.getFloat64(place, true), frames: at.getUint32(place + 12, true) });
+    for (let at = 1; at < entries.length; at += 1) if (!(entries[at].offset > entries[at - 1].offset)) throw new Error('The index of this file is broken');
+    const step = Math.max(1, Math.floor(entries.length / 24));
+    for (let at = 0; at < entries.length; at += step) {
+      const entry = entries[at];
+      const chunk = await chunkAt(entry.offset);
+      const next = entries[at + 1]?.offset ?? size - length;
+      if (chunk.frames !== entry.frames || entry.offset + 6 + chunk.size > next) throw new Error('A chunk of this file does not match its index');
+    }
+  } else {
+    for (let offset = 20, count = 0; offset < size && count < 24; count += 1) {
+      const chunk = await chunkAt(offset);
+      if (chunk.size > 64 * 1048576) throw new Error('A chunk of this file is too large for a .gcast');
+      offset += 6 + chunk.size;
+      if (offset > size) throw new Error('The .gcast file ends in the middle of a chunk');
+    }
+  }
+  return { cols, rows, fps, duration: Math.round((view.getUint32(16, true) / fps) * 10) / 10 };
+};
+
+/**
+ * Opens an upload: the client sends the file straight to the Drive session it gets back (in pieces with
+ * content-range, or whole), so big files never pass through the worker. `variant=<id>` adds another grid to a video.
+ */
 const partsStart = async (request, env, url) => {
   const total = Number(url.searchParams.get('size') ?? 0);
   if (!total || total > PART * PART_LIMIT) return json({ error: `Say the file size: /parts/start?size=<bytes>, up to ${PART * PART_LIMIT} bytes` }, 400);
+  const of = url.searchParams.get('variant');
+  if (of && !(/^[\w-]{11}$/.test(of) && (await mayEdit(request, env, of)))) return json({ error: 'Wrong upload key or edit token for this video' }, 403);
+  const admin = allowed(request, env);
+  const who = await visitor(request);
+  if (!admin && !(await spend(env, who, total, 1))) return json({ error: 'The daily upload limit for your address is used up, try tomorrow' }, 429);
   const id = newId();
   const edit = token();
-  const upload = await session(env, `${id}.gcast`, 'application/octet-stream', total);
-  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ token: edit, next: 0, offset: 0, total, upload, check: { header: false, skip: 0, trailer: false }, who: await visitor(request) }) });
-  return json({ id, part: PART, token: edit });
-};
-
-const partUpload = async (request, env, id, index) => {
-  const state = await hidden(env).fetch(`https://index/upload-state?id=${id}`).then((response) => response.json());
-  const admin = allowed(request, env);
-  if (!state || (!admin && request.headers.get('x-edit-token') !== state.token)) return json({ error: 'Unknown upload or wrong token' }, 403);
-  if (index >= PART_LIMIT) return json({ error: `At most ${PART_LIMIT} parts` }, 400);
-  if (index < state.next) return json({ ok: true, already: true });
-  if (index !== state.next) return json({ error: `Send part ${state.next} first` }, 409);
-  const size = Number(request.headers.get('content-length') ?? 0);
-  const last = state.offset + size === state.total;
-  // Drive takes resumable pieces in multiples of 256 KiB, except the last one
-  if (!size || size > PART || state.offset + size > state.total || (!last && size % 262144 !== 0)) return json({ error: `A part must be ${PART} bytes (the last one: the rest of the file)` }, 400);
-  if (!admin && !(await spend(env, state.who, size, index === 0 ? 1 : 0))) return json({ error: 'The daily upload limit for your address is used up, try tomorrow' }, 429);
-  const check = { ...state.check, last };
-  const file = await sendRange(env, state.upload, request.body.pipeThrough(checker(check)), state.offset, size, state.total);
-  delete check.last;
-  if (file) await rememberFile(env, `${id}.gcast`, file);
-  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ ...state, next: index + 1, offset: state.offset + size, check, done: Boolean(file) }) });
-  return json({ ok: true });
+  const name = `${id}.gcast`;
+  const origin = request.headers.get('origin');
+  const upload = await session(env, name, 'application/octet-stream', total, origin);
+  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ token: edit, total, name, ...(of ? { variant: of } : {}), who }) });
+  return json({ id, part: PART, token: edit, upload });
 };
 
 const partFinish = async (request, env, id, url) => {
   const state = await hidden(env).fetch(`https://index/upload-state?id=${id}`).then((response) => response.json());
   const admin = allowed(request, env);
   if (!state || (!admin && request.headers.get('x-edit-token') !== state.token)) return json({ error: 'Unknown upload or wrong token' }, 403);
-  if (state.check.skip > 0 || !state.check.header) return json({ error: 'The .gcast file ends in the middle of a chunk' }, 400);
-  const given = fields(url, admin);
+  const given = state.variant ? {} : fields(url, admin);
   if (given.error) return json(given, 400);
-  if (!state.done) return json({ error: `Only ${state.offset} of ${state.total} bytes arrived` }, 400);
-  const head = await asset(env, `${id}.gcast`, 'bytes=0-19');
-  if (!head.ok) return json({ error: 'The file is missing on the Drive' }, 500);
-  const info = describe(new Uint8Array(await head.arrayBuffer()));
-  const size = state.total;
-  const entry = { id, slug: slugify(given.title) || id, ...given, size, ...info, poster: false, added: new Date().toISOString().slice(0, 10), ...(admin ? {} : { token: state.token, who: state.who }) };
+  const file = await fileId(env, state.name);
+  if (!file) return json({ error: 'The file has not reached the Drive yet; send all of it first' }, 400);
+  const meta = await drive(env, `/drive/v3/files/${file}?fields=size`).then((response) => response.json());
+  if (Number(meta.size) !== state.total) return json({ error: `Only ${meta.size} of ${state.total} bytes arrived` }, 400);
+  let info;
+  try {
+    info = await inspect(env, state.name, state.total);
+  } catch (error) {
+    await drive(env, `/drive/v3/files/${file}`, { method: 'DELETE' });
+    await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(state.name)}`, { method: 'DELETE' });
+    return json({ error: `${error.message}; the upload was removed` }, 400);
+  }
+  if (state.variant) {
+    const name = `${state.variant}-${info.cols}.gcast`;
+    const old = await fileId(env, name);
+    if (old && old !== file) await drive(env, `/drive/v3/files/${old}`, { method: 'DELETE' });
+    await drive(env, `/drive/v3/files/${file}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+    await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(state.name)}`, { method: 'DELETE' });
+    await rememberFile(env, name, { id: file, size: state.total });
+    const add = (video) => (video.id === state.variant ? { ...video, variants: [...new Set([...(video.variants ?? []), info.cols])].sort((x, y) => x - y) } : video);
+    await catalog(env, (videos) => videos.map(add));
+    const entry = await hidden(env).fetch(`https://index/get?id=${state.variant}`).then((response) => (response.ok ? response.json() : null));
+    if (entry) await keepHidden(env, add(entry));
+    return json({ ok: true, cols: info.cols });
+  }
+  const entry = { id, slug: slugify(given.title) || id, ...given, size: state.total, ...info, poster: false, added: new Date().toISOString().slice(0, 10), ...(admin ? {} : { token: state.token, who: state.who }) };
   const answer = await remember(env, entry);
   return admin ? answer : json({ ...visible(entry), token: state.token }, 201);
 };
@@ -457,7 +519,7 @@ const publish = async (request, env, url) => {
   if (given.error) return json(given, 400);
   const size = Number(request.headers.get('content-length') ?? 0);
   if (!size) return json({ error: 'Send the file with a content-length' }, 411);
-  if (size > PART) return json({ error: `Files over ${PART} bytes go in parts: POST /parts/start` }, 413);
+  if (size > SMALL) return json({ error: `Files over ${SMALL} bytes go straight to the Drive: POST /parts/start?size=` }, 413);
   const who = await visitor(request);
   if (!admin && !(await spend(env, who, size, 1))) return json({ error: 'The daily upload limit for your address is used up, try tomorrow' }, 429);
   const [peek, body] = request.body.tee();
@@ -486,24 +548,6 @@ const poster = async (request, env, id) => {
   await catalog(env, (videos) => videos.map((video) => (video.id === id ? { ...video, poster: true } : video)));
   await hidden(env).fetch(`https://index/patch?id=${id}`, { method: 'POST', body: JSON.stringify({ poster: true }) });
   return json({ ok: true });
-};
-
-const variant = async (request, env, id, url) => {
-  if (!(await mayEdit(request, env, id))) return json({ error: 'Wrong upload key or edit token' }, 403);
-  const size = Number(request.headers.get('content-length') ?? 0);
-  if (!size || size > PART) return json({ error: `A variant must be from 1 byte to ${PART} bytes` }, 400);
-  const [peek, body] = request.body.tee();
-  const reader = peek.getReader();
-  const first = await reader.read();
-  reader.cancel();
-  const { cols } = describe(first.value ?? new Uint8Array());
-  await upload(env, `${id}-${cols}.gcast`, body.pipeThrough(checker({ last: true })), 'application/octet-stream', size);
-  const add = (video) => (video.id === id ? { ...video, variants: [...new Set([...(video.variants ?? []), cols])].sort((a, b) => a - b) } : video);
-  await catalog(env, (videos) => videos.map(add));
-  const unlisted = await hidden(env).fetch('https://index/list').then((response) => response.json());
-  const entry = unlisted.find((video) => video.id === id);
-  if (entry) await keepHidden(env, add(entry));
-  return json({ ok: true, cols });
 };
 
 const subtitles = async (request, env, id) => {
@@ -660,14 +704,10 @@ export default {
         const who = await visitor(request);
         return json(await hidden(env).fetch(`https://index/${counted[1]}?id=${counted[2]}&who=${who}&value=${encodeURIComponent(url.searchParams.get('value') ?? '0')}`, { method: 'POST' }).then((response) => response.json()));
       }
-      const part = /^\/parts\/([\w-]{11})\/(\d{1,4})$/.exec(url.pathname);
-      if (part && request.method === 'POST') return partUpload(request, env, part[1], Number(part[2]));
       const finish = /^\/parts\/([\w-]{11})\/finish$/.exec(url.pathname);
       if (finish && request.method === 'POST') return partFinish(request, env, finish[1], url);
       const image = /^\/poster\/([\w-]{11})$/.exec(url.pathname);
       if (image && request.method === 'POST') return poster(request, env, image[1]);
-      const extra = /^\/variant\/([\w-]{11})$/.exec(url.pathname);
-      if (extra && request.method === 'POST') return variant(request, env, extra[1], url);
       const captions = /^\/subtitles\/([\w-]{11})$/.exec(url.pathname);
       if (captions && request.method === 'POST') return subtitles(request, env, captions[1]);
       if (url.pathname === '/') return json({ hub: 'gcast hub', storage: 'Google Drive', files: '/v/<id>.gcast', upload: 'POST /upload?title=&license=&listed=1&source= with a .gcast body; anonymous uploads wait for review' });
