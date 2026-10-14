@@ -699,12 +699,24 @@ const serveFile = async (request, env, ctx, name) => {
   return new Response(body, { status: wanted ? 206 : 200, headers: out });
 };
 
+/**
+ * A live room. The broadcaster's chunks go into a short numbered queue; each viewer's own request reads from it,
+ * checking every 100 ms for the next number. (A Durable Object cannot write into one request's response, or resolve
+ * its promises, from another request's event, so viewers poll instead of being pushed to.)
+ */
 export class Room {
   constructor(state, env) {
     this.env = env;
     this.header = null;
-    this.latest = null;
-    this.viewers = new Set();
+    this.chunks = [];
+    this.next = 0;
+    this.waiters = new Set();
+    this.live = false;
+  }
+
+  wake() {
+    for (const resolve of this.waiters) resolve();
+    this.waiters.clear();
   }
 
   async fetch(request) {
@@ -722,53 +734,60 @@ export class Room {
       } catch {}
       this.socket = server;
       this.header = null;
-      this.latest = null;
+      this.chunks = [];
+      this.live = true;
+      this.wake();
       let queue = Promise.resolve();
       server.addEventListener('message', (event) => {
         queue = queue.then(async () => {
           if (this.socket !== server) return;
           const bytes = event.data instanceof ArrayBuffer ? new Uint8Array(event.data) : typeof event.data === 'string' ? null : new Uint8Array(await event.data.arrayBuffer());
           if (!bytes) return;
-          if (!this.header) {
-            this.header = bytes;
-            return;
+          if (!this.header) this.header = bytes;
+          else {
+            this.chunks.push({ number: this.next, bytes });
+            this.next += 1;
+            // ponytail: the last 8 chunks (about 8 s) are kept; a viewer further behind jumps to the newest
+            if (this.chunks.length > 8) this.chunks.shift();
           }
-          this.latest = bytes;
-          for (const viewer of this.viewers) {
-            try {
-              viewer.enqueue(bytes);
-            } catch {
-              this.viewers.delete(viewer);
-            }
-          }
+          this.wake();
         });
       });
       server.addEventListener('close', () => {
         if (this.socket !== server) return;
         this.socket = null;
-        for (const viewer of this.viewers) {
-          try {
-            viewer.close();
-          } catch {}
-        }
-        this.viewers.clear();
+        this.live = false;
         this.header = null;
-        this.latest = null;
+        this.chunks = [];
+        this.wake();
       });
       return new Response(null, { status: 101, webSocket: client });
     }
     if (!this.header) return json({ error: 'Nobody is streaming here now' }, 404);
-    const viewers = this.viewers;
-    const opening = [this.header, this.latest].filter(Boolean);
-    let self;
+    const room = this;
+    // a new viewer starts from the newest chunk, which begins with a key frame
+    let seen = (this.chunks.at(-1)?.number ?? this.next) - 1;
+    let sentHeader = false;
     const readable = new ReadableStream({
-      start(controller) {
-        self = controller;
-        for (const bytes of opening) controller.enqueue(bytes);
-        viewers.add(controller);
-      },
-      cancel() {
-        viewers.delete(self);
+      async pull(controller) {
+        if (!sentHeader) {
+          sentHeader = true;
+          controller.enqueue(room.header);
+        }
+        for (;;) {
+          if (!room.live) {
+            controller.close();
+            return;
+          }
+          const ahead = room.chunks.filter((chunk) => chunk.number > seen);
+          if (ahead.length) {
+            for (const chunk of ahead) controller.enqueue(chunk.bytes);
+            seen = ahead.at(-1).number;
+            return;
+          }
+          // a promise resolved from the broadcaster's event never reaches this request, so it looks again shortly
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
       },
     });
     return new Response(readable, { headers: { ...CORS, 'content-type': 'application/octet-stream', 'cache-control': 'no-store' } });
