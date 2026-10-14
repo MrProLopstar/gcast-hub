@@ -148,7 +148,7 @@ const checker = (state) => {
         const cols = view.getUint16(6, true);
         const rows = view.getUint16(8, true);
         const fps = view.getFloat32(10, true);
-        if (view.getUint32(0, true) !== 0x54534347 || head[4] !== 3 || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
+        if (view.getUint32(0, true) !== 0x54534347 || (head[4] !== 3 && head[4] !== 4) || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
         state.header = true;
         continue;
       }
@@ -444,7 +444,7 @@ const inspect = async (env, name, size) => {
   const cols = view.getUint16(6, true);
   const rows = view.getUint16(8, true);
   const fps = view.getFloat32(10, true);
-  if (view.getUint32(0, true) !== 0x54534347 || head[4] !== 3 || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
+  if (view.getUint32(0, true) !== 0x54534347 || (head[4] !== 3 && head[4] !== 4) || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
   const chunkAt = async (offset) => {
     if (offset + 6 > size) throw new Error('A chunk of this file points past its end');
     const bytes = await read(offset, offset + 5);
