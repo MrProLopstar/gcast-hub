@@ -148,7 +148,7 @@ const checker = (state) => {
         const cols = view.getUint16(6, true);
         const rows = view.getUint16(8, true);
         const fps = view.getFloat32(10, true);
-        if (view.getUint32(0, true) !== 0x54534347 || (head[4] !== 3 && head[4] !== 4) || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
+        if (view.getUint32(0, true) !== 0x54534347 || (head[4] < 3 || head[4] > 5) || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
         state.header = true;
         continue;
       }
@@ -444,7 +444,7 @@ const inspect = async (env, name, size) => {
   const cols = view.getUint16(6, true);
   const rows = view.getUint16(8, true);
   const fps = view.getFloat32(10, true);
-  if (view.getUint32(0, true) !== 0x54534347 || (head[4] !== 3 && head[4] !== 4) || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
+  if (view.getUint32(0, true) !== 0x54534347 || (head[4] < 3 || head[4] > 5) || cols < 8 || cols > 1000 || rows < 2 || rows > 600 || !(fps > 0 && fps <= 120)) throw new Error('This is not a .gcast v3 file');
   const chunkAt = async (offset) => {
     if (offset + 6 > size) throw new Error('A chunk of this file points past its end');
     const bytes = await read(offset, offset + 5);
@@ -488,6 +488,9 @@ const partsStart = async (request, env, url) => {
   if (!total || total > PART * PART_LIMIT) return json({ error: `Say the file size: /parts/start?size=<bytes>, up to ${PART * PART_LIMIT} bytes` }, 400);
   const of = url.searchParams.get('variant');
   if (of && !(/^[\w-]{11}$/.test(of) && (await mayEdit(request, env, of)))) return json({ error: 'Wrong upload key or edit token for this video' }, 403);
+  // replace=<id>: a new file for an existing video (re-encoded), keeping its code, title, views and votes
+  const replace = url.searchParams.get('replace');
+  if (replace && !(/^[\w-]{11}$/.test(replace) && (await mayEdit(request, env, replace)))) return json({ error: 'Wrong upload key or edit token for this video' }, 403);
   const admin = allowed(request, env);
   const who = await visitor(request);
   if (!admin && !(await spend(env, who, total, 1))) return json({ error: 'The daily upload limit for your address is used up, try tomorrow' }, 429);
@@ -496,7 +499,7 @@ const partsStart = async (request, env, url) => {
   const name = `${id}.gcast`;
   const origin = request.headers.get('origin');
   const upload = await session(env, name, 'application/octet-stream', total, origin);
-  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ token: edit, total, name, ...(of ? { variant: of } : {}), who }) });
+  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ token: edit, total, name, ...(of ? { variant: of } : {}), ...(replace ? { replace } : {}), who }) });
   return json({ id, part: PART, token: edit, upload });
 };
 
@@ -504,7 +507,7 @@ const partFinish = async (request, env, id, url) => {
   const state = await hidden(env).fetch(`https://index/upload-state?id=${id}`).then((response) => response.json());
   const admin = allowed(request, env);
   if (!state || (!admin && request.headers.get('x-edit-token') !== state.token)) return json({ error: 'Unknown upload or wrong token' }, 403);
-  const given = state.variant ? {} : fields(url, admin);
+  const given = state.variant || state.replace ? {} : fields(url, admin);
   if (given.error) return json(given, 400);
   const file = await fileId(env, state.name);
   if (!file) return json({ error: 'The file has not reached the Drive yet; send all of it first' }, 400);
@@ -517,6 +520,30 @@ const partFinish = async (request, env, id, url) => {
     await drive(env, `/drive/v3/files/${file}`, { method: 'DELETE' });
     await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(state.name)}`, { method: 'DELETE' });
     return json({ error: `${error.message}; the upload was removed` }, 400);
+  }
+  if (state.replace) {
+    const name = `${state.replace}.gcast`;
+    const old = await fileId(env, name);
+    if (old && old !== file) await drive(env, `/drive/v3/files/${old}`, { method: 'DELETE' });
+    await drive(env, `/drive/v3/files/${file}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+    await hidden(env).fetch(`https://index/file?name=${encodeURIComponent(state.name)}`, { method: 'DELETE' });
+    await rememberFile(env, name, { id: file, size: state.total });
+    // old grid sizes no longer match the new file; new ones come with --variant
+    const update = (video) => (video.id === state.replace ? { ...video, ...info, size: state.total, variants: [] } : video);
+    if (admin) {
+      await catalog(env, (videos) => videos.map(update));
+      const entry = await hidden(env).fetch(`https://index/get?id=${state.replace}`).then((response) => (response.ok ? response.json() : null));
+      if (entry) await keepHidden(env, update(entry));
+      const listed = (await readCatalog(env)).find((video) => video.id === state.replace);
+      return json(visible(listed ?? (entry ? update(entry) : { id: state.replace })));
+    }
+    // an uploader swapping the file of an approved video sends it back to review: no bait and switch
+    const before = (await readCatalog(env)).find((video) => video.id === state.replace) ?? (await hidden(env).fetch(`https://index/get?id=${state.replace}`).then((response) => (response.ok ? response.json() : null)));
+    if (!before) return json({ error: 'No such video' }, 404);
+    const after = { ...update(before), listed: false, ...(before.listed || before.review ? { review: true } : {}) };
+    await catalog(env, (videos) => videos.filter((video) => video.id !== state.replace));
+    await keepHidden(env, after);
+    return json(visible(after));
   }
   if (state.variant) {
     const name = `${state.variant}-${info.cols}.gcast`;
