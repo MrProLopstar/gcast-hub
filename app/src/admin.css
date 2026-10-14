@@ -71,3 +71,5 @@
 
 .login .google { min-height: 44px; display: grid; justify-items: center; }
 .login .or { text-align: center; }
+/* Google's button sits in a light iframe: with the page's dark color scheme the browser would paint it white */
+.login .google iframe { color-scheme: light; }

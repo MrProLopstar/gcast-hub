@@ -244,7 +244,6 @@ const Admin = () => {
           <h2>Вход в админку</h2>
           <div ref={button} className="google" />
           {status && <p className="error">{status}</p>}
-          <p className="note">Пускает только аккаунт Google админа хаба.</p>
         </div>
       </div>
     );
