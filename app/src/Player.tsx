@@ -18,7 +18,10 @@ declare module 'react' {
  * The <glyph-player> element. Its settings are written as attributes by hand: React 19 would set them as
  * properties, which overwrites the element's own methods of the same names (poster, sources).
  */
-export const Player = ({ onPlay, className, ...attributes }: Attributes & { onPlay?: () => void; className?: string }) => {
+type Events = { onPlay?: () => void; onTime?: (seconds: number, duration: number) => void; onEnded?: () => void; start?: number; className?: string };
+type Playing = EventTarget & { currentTime: number; duration: number; seek: (seconds: number) => Promise<void> };
+
+export const Player = ({ onPlay, onTime, onEnded, start, className, ...attributes }: Attributes & Events) => {
   const element = useRef<HTMLElement>(null);
   const all: Attributes = { mode: 'braille', cols: '160', ...attributes };
   const signature = JSON.stringify(all);
@@ -38,6 +41,28 @@ export const Player = ({ onPlay, className, ...attributes }: Attributes & { onPl
     player?.addEventListener('play', onPlay, { once: true });
     return () => player?.removeEventListener('play', onPlay);
   }, [onPlay, attributes.src]);
+  useEffect(() => {
+    const player = (element.current as (HTMLElement & { player?: Playing }) | null)?.player;
+    if (!player) return;
+    const time = () => onTime?.(player.currentTime, player.duration);
+    const ended = () => onEnded?.();
+    // jump to `start` once the file knows its length (continuing where the viewer stopped)
+    let jumped = !start;
+    const ready = () => {
+      if (jumped || !(player.duration > 0)) return;
+      jumped = true;
+      void player.seek(start ?? 0);
+    };
+    player.addEventListener('timeupdate', time);
+    player.addEventListener('ended', ended);
+    player.addEventListener('durationchange', ready);
+    ready();
+    return () => {
+      player.removeEventListener('timeupdate', time);
+      player.removeEventListener('ended', ended);
+      player.removeEventListener('durationchange', ready);
+    };
+  }, [onTime, onEnded, start, attributes.src]);
   return <glyph-player ref={element} className={className} />;
 };
 

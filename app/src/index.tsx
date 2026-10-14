@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { catalog, clock, fileUrl, licenseName, megabytes, meta, myVote, plural, sources, stats, upload, view, vote, worker, LICENSES, type Stats, type Video } from './api';
 import { Ambient, Player } from './Player';
 import { Live, LiveWatch } from './Live';
+import { forget, remember, resumeAt, spots } from './progress';
 import './hub.css';
 
 const views = (count: number): string => `${count} ${plural(count, 'просмотр', 'просмотра', 'просмотров')}`;
@@ -29,6 +30,17 @@ const go = (search: string): void => {
   scrollTo({ top: 0 });
 };
 
+/** The red line under a thumbnail: how much of the video this browser has watched. */
+const Watched = ({ id }: { id: string }) => {
+  const spot = spots()[id];
+  if (!spot || !(spot.duration > 0)) return null;
+  return (
+    <span className="watched" aria-label="Уже смотрели">
+      <span style={{ transform: `scaleX(${Math.min(1, spot.time / spot.duration).toFixed(3)})` }} />
+    </span>
+  );
+};
+
 const Card = ({ video, files, stat }: { video: Video; files: string; stat?: Stats }) => (
   <a
     className="card"
@@ -42,6 +54,7 @@ const Card = ({ video, files, stat }: { video: Video; files: string; stat?: Stat
     <div className="thumb">
       {video.poster ? <img loading="lazy" alt="" src={fileUrl(files, video, 'jpg')} /> : <div className="glyphs">⣿⡇⠶</div>}
       <time>{clock(video.duration)}</time>
+      <Watched id={video.id} />
     </div>
     <div>
       <h3>{video.title}</h3>
@@ -93,6 +106,26 @@ const SORTS: [Sort, string][] = [
   ['long', 'Длинные'],
 ];
 
+/** Videos started in this browser and not finished, newest first. */
+const Continue = ({ videos, files }: { videos: Video[]; files: string }) => {
+  const started = spots();
+  const list = videos
+    .filter((video) => resumeAt(video.id) > 0)
+    .sort((a, b) => (started[b.id]?.at ?? 0) - (started[a.id]?.at ?? 0))
+    .slice(0, 8);
+  if (!list.length) return null;
+  return (
+    <section className="continue" aria-label="Продолжить просмотр">
+      <h2>Продолжить просмотр</h2>
+      <div className="row-scroll">
+        {list.map((video) => (
+          <Card key={video.id} video={video} files={files} />
+        ))}
+      </div>
+    </section>
+  );
+};
+
 const Home = ({ videos, files, query, loaded }: { videos: Video[]; files: string; query: string; loaded: boolean }) => {
   const [sort, setSort] = useState<Sort>('new');
   const [numbers, setNumbers] = useState<Record<string, Stats>>({});
@@ -113,6 +146,7 @@ const Home = ({ videos, files, query, loaded }: { videos: Video[]; files: string
   }, [videos, query, sort, numbers]);
   return (
     <main>
+      {!query && <Continue videos={videos} files={files} />}
       <div className="chips" role="group" aria-label="Порядок">
         {SORTS.map(([value, label]) => (
           <button key={value} type="button" className="chip" aria-pressed={sort === value} onClick={() => setSort(value)}>
@@ -168,6 +202,29 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
   const counted = useCallback(() => {
     if (video) void view(video.id).then(setStat).catch(() => undefined);
   }, [video?.id]);
+  const start = useMemo(() => (video ? resumeAt(video.id) : 0), [video?.id]);
+  const [resumed, setResumed] = useState(true);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  useEffect(() => {
+    setResumed(true);
+    setCountdown(null);
+  }, [video?.id]);
+  const keep = useCallback((time: number, duration: number) => video && remember(video.id, time, duration), [video?.id]);
+  const finished = useCallback(() => {
+    if (!video) return;
+    forget(video.id);
+    setCountdown(5);
+  }, [video?.id]);
+  const nextVideo = videos.find((item) => item.id !== video?.id && resumeAt(item.id) === 0 && item.id !== key$) ?? videos.find((item) => item.id !== video?.id);
+  useEffect(() => {
+    if (countdown === null || !nextVideo) return;
+    if (countdown <= 0) {
+      go(`?v=${nextVideo.id}`);
+      return;
+    }
+    const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [countdown, nextVideo?.id]);
   if (video === undefined)
     return (
       <main className="watch" aria-busy="true">
@@ -211,8 +268,41 @@ const Watch = ({ key$, videos, files, loaded }: { key$: string; videos: Video[];
           heading={video.title}
           source={video.source}
           onPlay={counted}
+          start={start || undefined}
+          onTime={keep}
+          onEnded={finished}
         />
+        {countdown !== null && nextVideo && (
+          <div className="up-next" role="status">
+            <span className="meta">Далее через {countdown} с</span>
+            <strong>{nextVideo.title}</strong>
+            <div className="row">
+              <button type="button" className="button primary" onClick={() => go(`?v=${nextVideo.id}`)}>
+                Смотреть
+              </button>
+              <button type="button" className="button" onClick={() => setCountdown(null)}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
         </Ambient>
+        {start > 0 && resumed && (
+          <div className="resumed">
+            <span>Продолжено с {clock(start)}</span>
+            <button
+              type="button"
+              className="button ghost"
+              onClick={() => {
+                const player = (document.querySelector('.watch glyph-player') as (HTMLElement & { player?: { seek: (seconds: number) => Promise<void> } }) | null)?.player;
+                void player?.seek(0);
+                setResumed(false);
+              }}
+            >
+              Начать сначала
+            </button>
+          </div>
+        )}
         <h1>{video.title}</h1>
         <div className="bar">
           <div className="meta">
@@ -458,3 +548,5 @@ const App = () => {
 };
 
 createRoot(document.getElementById('root')!).render(<App />);
+
+if ('serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js').catch(() => undefined);

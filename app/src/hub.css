@@ -185,3 +185,15 @@ html, body { overflow-x: hidden; }
 @media (orientation: portrait) and (max-width: 640px) {
   glyph-player.filled, .ambient > glyph-player.filled { inset: auto; top: 0; left: 0; width: 100dvh; height: 100dvw; transform: rotate(90deg) translateY(-100%); transform-origin: top left; }
 }
+
+/* continue watching: the watched part under thumbnails, a row of started videos, the place note and "up next" */
+.thumb .watched { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255, 255, 255, 0.25); }
+.thumb .watched span { display: block; height: 100%; background: #ff4d4d; transform-origin: left; }
+.continue { margin-bottom: 22px; display: grid; gap: 12px; }
+.continue h2 { margin: 0; font-size: 18px; }
+.row-scroll { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(240px, 280px); gap: 14px; overflow-x: auto; padding-bottom: 6px; }
+.resumed { display: flex; gap: 10px; align-items: center; margin-top: 10px; padding: 6px 6px 6px 14px; border-radius: 999px; background: var(--surface); width: fit-content; color: var(--muted); font-size: 14px; }
+.ambient { position: relative; }
+.up-next { position: absolute; right: 16px; bottom: 72px; z-index: 2; display: grid; gap: 6px; max-width: min(340px, calc(100% - 32px)); padding: 14px; border-radius: 12px; background: rgba(12, 15, 20, 0.92); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
+.up-next strong { font-size: 15px; }
+@media (max-width: 640px) { .continue { padding: 0 12px; } .row-scroll { grid-auto-columns: minmax(200px, 70vw); } .up-next { right: 8px; bottom: 56px; } }
