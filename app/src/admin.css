@@ -68,3 +68,6 @@
 .pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 .facts a.mono:hover { color: var(--accent); }
 .panel.preview { width: min(1100px, 100%); }
+
+.login .google { min-height: 44px; display: grid; justify-items: center; }
+.login .or { text-align: center; }

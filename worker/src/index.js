@@ -1,6 +1,6 @@
 const CORS = {
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'range, content-type, x-hub-key, x-edit-token',
+  'access-control-allow-headers': 'range, content-type, x-hub-key, x-edit-token, authorization',
   'access-control-allow-methods': 'GET, HEAD, POST, OPTIONS',
   'access-control-expose-headers': 'content-range, content-length, accept-ranges',
 };
@@ -224,6 +224,24 @@ const slugify = (text) => text.toLowerCase().normalize('NFKD').replace(/[^\p{L}\
 const PART = 90 * 1048576;
 const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(11)), (byte) => ALPHABET[byte % ALPHABET.length]).join('');
 const allowed = (request, env) => Boolean(env.HUB_KEY) && request.headers.get('x-hub-key') === env.HUB_KEY;
+
+const signedIn = new Map();
+/**
+ * The admin: the hub key, or a Google sign-in of the address in ADMIN_EMAIL. Google's ID token is checked with
+ * Google itself (audience = this hub's client, verified address) and remembered until it expires.
+ */
+const isAdmin = async (request, env) => {
+  if (allowed(request, env)) return true;
+  const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+  if (!token || !env.ADMIN_EMAIL) return false;
+  const known = signedIn.get(token);
+  if (known && known > Date.now()) return true;
+  const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`).then((response) => (response.ok ? response.json() : null)).catch(() => null);
+  const audiences = [env.GOOGLE_WEB_CLIENT_ID, env.GOOGLE_CLIENT_ID].filter(Boolean);
+  const ok = Boolean(info && audiences.includes(info.aud) && String(info.email_verified) === 'true' && env.ADMIN_EMAIL.split(',').map((item) => item.trim().toLowerCase()).includes(String(info.email).toLowerCase()));
+  if (ok) signedIn.set(token, Number(info.exp) * 1000);
+  return ok;
+};
 const PART_LIMIT = 30;
 const SMALL = 20 * 1048576;
 
@@ -807,7 +825,7 @@ export default {
       if (file && (request.method === 'GET' || request.method === 'HEAD')) return serveFile(request, env, ctx, `${file[1]}.${file[2]}`);
       if (url.pathname === '/upload' && request.method === 'POST') return publish(request, env, url);
       if (url.pathname.startsWith('/admin/')) {
-        if (!allowed(request, env)) return json({ error: 'Wrong upload key' }, 403);
+        if (!(await isAdmin(request, env))) return json({ error: 'Sign in as the hub admin' }, 403);
         if (url.pathname === '/admin/videos' && request.method === 'GET') return adminList(env);
         const target = /^\/admin\/videos\/([\w-]{11})(\/delete)?$/.exec(url.pathname);
         if (target && request.method === 'POST') return target[2] ? adminDelete(env, target[1]) : adminUpdate(request, env, target[1]);
