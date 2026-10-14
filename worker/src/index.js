@@ -490,7 +490,8 @@ const partsStart = async (request, env, url) => {
   if (of && !(/^[\w-]{11}$/.test(of) && (await mayEdit(request, env, of)))) return json({ error: 'Wrong upload key or edit token for this video' }, 403);
   // replace=<id>: a new file for an existing video (re-encoded), keeping its code, title, views and votes
   const replace = url.searchParams.get('replace');
-  if (replace && !(/^[\w-]{11}$/.test(replace) && (await mayEdit(request, env, replace)))) return json({ error: 'Wrong upload key or edit token for this video' }, 403);
+  // only the admin replaces files: an uploader could otherwise swap an approved video for something else and keep its views
+  if (replace && !(/^[\w-]{11}$/.test(replace) && allowed(request, env))) return json({ error: 'Only the hub admin can replace a video file' }, 403);
   const admin = allowed(request, env);
   const who = await visitor(request);
   if (!admin && !(await spend(env, who, total, 1))) return json({ error: 'The daily upload limit for your address is used up, try tomorrow' }, 429);
@@ -530,20 +531,11 @@ const partFinish = async (request, env, id, url) => {
     await rememberFile(env, name, { id: file, size: state.total });
     // old grid sizes no longer match the new file; new ones come with --variant
     const update = (video) => (video.id === state.replace ? { ...video, ...info, size: state.total, variants: [] } : video);
-    if (admin) {
-      await catalog(env, (videos) => videos.map(update));
-      const entry = await hidden(env).fetch(`https://index/get?id=${state.replace}`).then((response) => (response.ok ? response.json() : null));
-      if (entry) await keepHidden(env, update(entry));
-      const listed = (await readCatalog(env)).find((video) => video.id === state.replace);
-      return json(visible(listed ?? (entry ? update(entry) : { id: state.replace })));
-    }
-    // an uploader swapping the file of an approved video sends it back to review: no bait and switch
-    const before = (await readCatalog(env)).find((video) => video.id === state.replace) ?? (await hidden(env).fetch(`https://index/get?id=${state.replace}`).then((response) => (response.ok ? response.json() : null)));
-    if (!before) return json({ error: 'No such video' }, 404);
-    const after = { ...update(before), listed: false, ...(before.listed || before.review ? { review: true } : {}) };
-    await catalog(env, (videos) => videos.filter((video) => video.id !== state.replace));
-    await keepHidden(env, after);
-    return json(visible(after));
+    await catalog(env, (videos) => videos.map(update));
+    const entry = await hidden(env).fetch(`https://index/get?id=${state.replace}`).then((response) => (response.ok ? response.json() : null));
+    if (entry) await keepHidden(env, update(entry));
+    const listed = (await readCatalog(env)).find((video) => video.id === state.replace);
+    return json(visible(listed ?? (entry ? update(entry) : { id: state.replace })));
   }
   if (state.variant) {
     const name = `${state.variant}-${info.cols}.gcast`;
