@@ -227,11 +227,10 @@ const allowed = (request, env) => Boolean(env.HUB_KEY) && request.headers.get('x
 
 const signedIn = new Map();
 /**
- * The admin: the hub key, or a Google sign-in of the address in ADMIN_EMAIL. Google's ID token is checked with
+ * The admin page: a Google sign-in of the address in ADMIN_EMAIL only. Google's ID token is checked with
  * Google itself (audience = this hub's client, verified address) and remembered until it expires.
  */
 const isAdmin = async (request, env) => {
-  if (allowed(request, env)) return true;
   const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
   if (!token || !env.ADMIN_EMAIL) return false;
   const known = signedIn.get(token);

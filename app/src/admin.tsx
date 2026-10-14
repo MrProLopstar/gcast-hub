@@ -144,13 +144,6 @@ const googleScript = (): Promise<void> =>
   });
 
 const Admin = () => {
-  const [key, setKey] = useState(() => {
-    try {
-      return localStorage.getItem('gcast-hub-key') ?? '';
-    } catch {
-      return '';
-    }
-  });
   const [files, setFiles] = useState('');
   const [videos, setVideos] = useState<Video[] | null>(null);
   const [status, setStatus] = useState('');
@@ -167,11 +160,8 @@ const Admin = () => {
     }
   });
   const button = useRef<HTMLDivElement>(null);
-  const who: Credentials = google ? { google } : { key };
+  const who: Credentials = { google };
   const load = async (as: Credentials = who) => {
-    try {
-      if (as.key) localStorage.setItem('gcast-hub-key', as.key);
-    } catch {}
     try {
       const { videos: list } = await call<{ videos: Video[] }>('/admin/videos', as);
       setVideos(list);
@@ -185,13 +175,13 @@ const Admin = () => {
           sessionStorage.removeItem('gcast-hub-google');
         } catch {}
       }
-      setStatus(denied ? (as.google ? 'Этот аккаунт Google не админ хаба, или вход устарел.' : 'Ключ не подошёл.') : `Не получилось: ${error instanceof Error ? error.message : String(error)}`);
+      setStatus(denied ? 'Этот аккаунт Google не админ хаба, или вход устарел — войдите ещё раз.' : `Не получилось: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
   useEffect(() => {
     document.title = 'Админка · gcast hub';
     void worker().then(setFiles);
-    if (google || key) void load();
+    if (google) void load();
   }, []);
   useEffect(() => {
     if (videos) return;
@@ -212,7 +202,7 @@ const Admin = () => {
         });
         window.google.accounts.id.renderButton(button.current, { theme: 'filled_black', size: 'large', shape: 'pill', text: 'signin_with', locale: 'ru', width: 320 });
       })
-      .catch(() => setStatus('Вход через Google сейчас недоступен, можно войти ключом.'));
+      .catch(() => setStatus('Вход через Google сейчас недоступен, попробуйте обновить страницу.'));
     return () => {
       cancelled = true;
     };
@@ -247,29 +237,15 @@ const Admin = () => {
   if (!videos)
     return (
       <div className="login">
-        <form
-          className="panel"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void load();
-          }}
-        >
+        <div className="panel">
           <a className="logo" href="./">
             gcast<b>hub</b>
           </a>
           <h2>Вход в админку</h2>
           <div ref={button} className="google" />
-          <p className="note or">или ключом хаба</p>
-          <label className="field">
-            Ключ хаба
-            <input type="password" autoComplete="current-password" value={key} onChange={(event) => setKey(event.target.value)} autoFocus />
-          </label>
           {status && <p className="error">{status}</p>}
-          <button type="submit" className="button primary" disabled={!key}>
-            Войти
-          </button>
-          <p className="note">Через Google пускает только почту админа. Ключ — это секрет HUB_KEY воркера, он хранится только в этом браузере.</p>
-        </form>
+          <p className="note">Пускает только аккаунт Google админа хаба.</p>
+        </div>
       </div>
     );
   return (
@@ -288,12 +264,10 @@ const Admin = () => {
             className="button ghost"
             onClick={() => {
               try {
-                localStorage.removeItem('gcast-hub-key');
                 sessionStorage.removeItem('gcast-hub-google');
               } catch {}
               window.google?.accounts.id.disableAutoSelect();
               setGoogle('');
-              setKey('');
               setVideos(null);
             }}
           >
