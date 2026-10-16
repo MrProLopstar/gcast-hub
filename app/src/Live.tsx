@@ -60,7 +60,7 @@ export const Live = ({ files, close }: { files: string; close: () => void }) => 
         socket.addEventListener('open', resolve, { once: true });
         socket.addEventListener('error', () => reject(new Error('в этой комнате уже идёт чужой эфир, выберите другое название')), { once: true });
       });
-      const encoder = new Encoder({ cols, rows, fps, chunkFrames: fps }, (bytes) => socket.readyState === 1 && socket.send(bytes));
+      const encoder = new Encoder({ cols, rows, fps, chunkFrames: fps, fast: true }, (bytes) => socket.readyState === 1 && socket.send(bytes));
       const timer = setInterval(() => {
         if (!context) return;
         context.drawImage(video, 0, 0, cols, rows);
