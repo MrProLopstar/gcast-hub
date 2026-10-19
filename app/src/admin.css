@@ -1,7 +1,4 @@
 /* Admin: summary numbers on top, then one card per video — poster, editable fields, license with its meaning, numbers, actions */
-.login { min-height: 100dvh; display: grid; place-items: center; padding: 16px; }
-.login .panel { width: min(400px, 100%); }
-.login .logo { font-size: 22px; }
 
 .admin { max-width: 1320px; margin: 0 auto; display: grid; gap: 18px; }
 .totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
@@ -69,7 +66,4 @@
 .facts a.mono:hover { color: var(--accent); }
 .panel.preview { width: min(1100px, 100%); }
 
-.login .google { min-height: 44px; display: grid; justify-items: center; }
-.login .or { text-align: center; }
 /* Google's button sits in a light iframe: with the page's dark color scheme the browser would paint it white */
-.login .google iframe { color-scheme: light; }

@@ -141,3 +141,56 @@ export const plural = (count: number, one: string, few: string, many: string): s
 };
 
 export const megabytes = (bytes: number): string => `${(bytes / 1048576).toFixed(bytes < 10 * 1048576 ? 1 : 0)} МБ`;
+
+declare global {
+  interface Window {
+    google?: { accounts: { id: { initialize: (options: { client_id: string; callback: (answer: { credential: string }) => void }) => void; renderButton: (node: HTMLElement, options: Record<string, unknown>) => void; disableAutoSelect: () => void } } };
+  }
+}
+
+/** Google's sign-in script, loaded once. */
+export const googleScript = (): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (window.google) return resolve();
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Google sign-in did not load'));
+    document.head.append(script);
+  });
+
+
+const GOOGLE = 'gcast-hub-google';
+
+/** The Google ID token saved in this tab, if it has not expired yet. */
+export const savedGoogle = (): string => {
+  try {
+    const token = sessionStorage.getItem(GOOGLE) ?? '';
+    const payload = JSON.parse(atob((token.split('.')[1] ?? '').replace(/-/g, '+').replace(/_/g, '/'))) as { exp?: number };
+    return (payload.exp ?? 0) * 1000 > Date.now() + 60000 ? token : '';
+  } catch {
+    return '';
+  }
+};
+
+export const saveGoogle = (token: string): void => {
+  try {
+    if (token) sessionStorage.setItem(GOOGLE, token);
+    else sessionStorage.removeItem(GOOGLE);
+  } catch {}
+};
+
+/** Draws Google's sign-in button into `node`; `signed` gets the ID token the worker checks with Google. */
+export const googleButton = async (node: HTMLElement, signed: (token: string) => void): Promise<void> => {
+  const [config] = await Promise.all([fetch('/hub.json').then((response) => response.json() as Promise<{ googleClientId?: string }>), googleScript()]);
+  if (!config.googleClientId || !window.google) throw new Error('Google sign-in is not set up');
+  window.google.accounts.id.initialize({
+    client_id: config.googleClientId,
+    callback: ({ credential }) => {
+      saveGoogle(credential);
+      signed(credential);
+    },
+  });
+  window.google.accounts.id.renderButton(node, { theme: 'filled_black', size: 'large', shape: 'pill', text: 'signin_with', locale: 'ru', width: 300 });
+};

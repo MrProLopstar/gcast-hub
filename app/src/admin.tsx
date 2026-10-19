@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { call, clock, fileUrl, megabytes, worker, LICENSES, type Credentials, type Video } from './api';
+import { call, clock, fileUrl, googleButton, megabytes, saveGoogle, savedGoogle, worker, LICENSES, type Credentials, type Video } from './api';
 import './hub.css';
 import './admin.css';
 import { Player } from './Player';
@@ -125,24 +125,6 @@ const Item = ({ video, files, who, reload, say, watch }: { video: Video; files: 
   );
 };
 
-declare global {
-  interface Window {
-    google?: { accounts: { id: { initialize: (options: { client_id: string; callback: (answer: { credential: string }) => void }) => void; renderButton: (node: HTMLElement, options: Record<string, unknown>) => void; disableAutoSelect: () => void } } };
-  }
-}
-
-/** Google's sign-in script, loaded once. */
-const googleScript = (): Promise<void> =>
-  new Promise((resolve, reject) => {
-    if (window.google) return resolve();
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Google sign-in did not load'));
-    document.head.append(script);
-  });
-
 const Admin = () => {
   const [files, setFiles] = useState('');
   const [videos, setVideos] = useState<Video[] | null>(null);
@@ -152,13 +134,7 @@ const Admin = () => {
   const [page, setPage] = useState(0);
   const [legend, setLegend] = useState(false);
   const [watching, setWatching] = useState<Video | null>(null);
-  const [google, setGoogle] = useState(() => {
-    try {
-      return sessionStorage.getItem('gcast-hub-google') ?? '';
-    } catch {
-      return '';
-    }
-  });
+  const [google, setGoogle] = useState(savedGoogle);
   const button = useRef<HTMLDivElement>(null);
   const who: Credentials = { google };
   const load = async (as: Credentials = who) => {
@@ -171,9 +147,7 @@ const Admin = () => {
       const denied = error instanceof Error && /admin|key/i.test(error.message);
       if (denied && as.google) {
         setGoogle('');
-        try {
-          sessionStorage.removeItem('gcast-hub-google');
-        } catch {}
+        saveGoogle('');
       }
       setStatus(denied ? 'Этот аккаунт Google не админ хаба, или вход устарел — войдите ещё раз.' : `Не получилось: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -187,20 +161,11 @@ const Admin = () => {
     if (videos) return;
     let cancelled = false;
     // the Google button: its answer is an ID token that the worker checks with Google
-    void Promise.all([fetch('/hub.json').then((response) => response.json() as Promise<{ googleClientId?: string }>), googleScript()])
-      .then(([config]) => {
-        if (cancelled || !config.googleClientId || !button.current || !window.google) return;
-        window.google.accounts.id.initialize({
-          client_id: config.googleClientId,
-          callback: ({ credential }) => {
-            setGoogle(credential);
-            try {
-              sessionStorage.setItem('gcast-hub-google', credential);
-            } catch {}
-            void load({ google: credential });
-          },
-        });
-        window.google.accounts.id.renderButton(button.current, { theme: 'filled_black', size: 'large', shape: 'pill', text: 'signin_with', locale: 'ru', width: 320 });
+    if (button.current)
+      void googleButton(button.current, (credential) => {
+        if (cancelled) return;
+        setGoogle(credential);
+        void load({ google: credential });
       })
       .catch(() => setStatus('Вход через Google сейчас недоступен, попробуйте обновить страницу.'));
     return () => {
@@ -262,9 +227,7 @@ const Admin = () => {
             type="button"
             className="button ghost"
             onClick={() => {
-              try {
-                sessionStorage.removeItem('gcast-hub-google');
-              } catch {}
+              saveGoogle('');
               window.google?.accounts.id.disableAutoSelect();
               setGoogle('');
               setVideos(null);

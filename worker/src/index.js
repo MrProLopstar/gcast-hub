@@ -206,7 +206,7 @@ const mayEdit = async (request, env, id) => {
   return Boolean(entry?.token && entry.token === given);
 };
 
-const PRIVATE = ['token', 'who'];
+const PRIVATE = ['token', 'who', 'email'];
 const visible = (entry) => Object.fromEntries(Object.entries(entry).filter(([key]) => !PRIVATE.includes(key)));
 
 const cleanSource = (value) => {
@@ -227,20 +227,41 @@ const allowed = (request, env) => Boolean(env.HUB_KEY) && request.headers.get('x
 
 const signedIn = new Map();
 /**
- * The admin page: a Google sign-in of the address in ADMIN_EMAIL only. Google's ID token is checked with
- * Google itself (audience = this hub's client, verified address) and remembered until it expires.
+ * The Google account behind the request: an ID token from this hub's Google sign-in, checked with Google itself
+ * (audience = this hub's client, verified address) and remembered until it expires. Null without one.
  */
-const isAdmin = async (request, env) => {
+const googleUser = async (request, env) => {
   const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
-  if (!token || !env.ADMIN_EMAIL) return false;
+  if (!token) return null;
   const known = signedIn.get(token);
-  if (known && known > Date.now()) return true;
+  if (known && known.until > Date.now()) return known.email;
   const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`).then((response) => (response.ok ? response.json() : null)).catch(() => null);
   const audiences = [env.GOOGLE_WEB_CLIENT_ID, env.GOOGLE_CLIENT_ID].filter(Boolean);
-  const ok = Boolean(info && audiences.includes(info.aud) && String(info.email_verified) === 'true' && env.ADMIN_EMAIL.split(',').map((item) => item.trim().toLowerCase()).includes(String(info.email).toLowerCase()));
-  if (ok) signedIn.set(token, Number(info.exp) * 1000);
-  return ok;
+  if (!info || !audiences.includes(info.aud) || String(info.email_verified) !== 'true') return null;
+  const email = String(info.email).toLowerCase();
+  signedIn.set(token, { email, until: Number(info.exp) * 1000 });
+  return email;
 };
+
+/** The admin page and admin rights: a Google sign-in of an address in ADMIN_EMAIL only. */
+const isAdmin = async (request, env) => {
+  if (!env.ADMIN_EMAIL) return false;
+  const email = await googleUser(request, env);
+  return Boolean(email && env.ADMIN_EMAIL.split(',').map((item) => item.trim().toLowerCase()).includes(email));
+};
+
+/**
+ * Who uploads: the admin (hub key or the admin's Google sign-in), or any signed-in Google account. Anonymous
+ * uploads are refused. `who` is a hash of the address, for the daily limit; the address itself stays private.
+ */
+const uploader = async (request, env) => {
+  if (allowed(request, env) || (await isAdmin(request, env))) return { admin: true };
+  const email = await googleUser(request, env);
+  if (!email) return null;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`gcast-hub:${email}`));
+  return { admin: false, email, who: Array.from(new Uint8Array(digest).slice(0, 12), (byte) => byte.toString(16).padStart(2, '0')).join('') };
+};
+const SIGN_IN = 'Sign in with Google to upload: on the hub, or with glc login in the terminal';
 const PART_LIMIT = 30;
 const SMALL = 20 * 1048576;
 
@@ -492,21 +513,22 @@ const partsStart = async (request, env, url) => {
   const replace = url.searchParams.get('replace');
   // only the admin replaces files: an uploader could otherwise swap an approved video for something else and keep its views
   if (replace && !(/^[\w-]{11}$/.test(replace) && allowed(request, env))) return json({ error: 'Only the hub admin can replace a video file' }, 403);
-  const admin = allowed(request, env);
-  const who = await visitor(request);
-  if (!admin && !(await spend(env, who, total, 1))) return json({ error: 'The daily upload limit for your address is used up, try tomorrow' }, 429);
+  const person = await uploader(request, env);
+  if (!person) return json({ error: SIGN_IN }, 401);
+  const { admin, who, email } = person;
+  if (!admin && !(await spend(env, who, total, 1))) return json({ error: 'The daily upload limit for your account is used up, try tomorrow' }, 429);
   const id = newId();
   const edit = token();
   const name = `${id}.gcast`;
   const origin = request.headers.get('origin');
   const upload = await session(env, name, 'application/octet-stream', total, origin);
-  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ token: edit, total, name, ...(of ? { variant: of } : {}), ...(replace ? { replace } : {}), who }) });
+  await hidden(env).fetch(`https://index/upload-state?id=${id}`, { method: 'POST', body: JSON.stringify({ token: edit, total, name, ...(of ? { variant: of } : {}), ...(replace ? { replace } : {}), ...(admin ? {} : { who, email }) }) });
   return json({ id, part: PART, token: edit, upload });
 };
 
 const partFinish = async (request, env, id, url) => {
   const state = await hidden(env).fetch(`https://index/upload-state?id=${id}`).then((response) => response.json());
-  const admin = allowed(request, env);
+  const admin = allowed(request, env) || (await isAdmin(request, env));
   if (!state || (!admin && request.headers.get('x-edit-token') !== state.token)) return json({ error: 'Unknown upload or wrong token' }, 403);
   const given = state.variant || state.replace ? {} : fields(url, admin);
   if (given.error) return json(given, 400);
@@ -550,20 +572,21 @@ const partFinish = async (request, env, id, url) => {
     if (entry) await keepHidden(env, add(entry));
     return json({ ok: true, cols: info.cols });
   }
-  const entry = { id, slug: slugify(given.title) || id, ...given, size: state.total, ...info, poster: false, added: new Date().toISOString().slice(0, 10), ...(admin ? {} : { token: state.token, who: state.who }) };
+  const entry = { id, slug: slugify(given.title) || id, ...given, size: state.total, ...info, poster: false, added: new Date().toISOString().slice(0, 10), ...(admin || !state.who ? {} : { token: state.token, who: state.who, email: state.email }) };
   const answer = await remember(env, entry);
   return admin ? answer : json({ ...visible(entry), token: state.token }, 201);
 };
 
 const publish = async (request, env, url) => {
-  const admin = allowed(request, env);
+  const person = await uploader(request, env);
+  if (!person) return json({ error: SIGN_IN }, 401);
+  const { admin, who, email } = person;
   const given = fields(url, admin);
   if (given.error) return json(given, 400);
   const size = Number(request.headers.get('content-length') ?? 0);
   if (!size) return json({ error: 'Send the file with a content-length' }, 411);
   if (size > SMALL) return json({ error: `Files over ${SMALL} bytes go straight to the Drive: POST /parts/start?size=` }, 413);
-  const who = await visitor(request);
-  if (!admin && !(await spend(env, who, size, 1))) return json({ error: 'The daily upload limit for your address is used up, try tomorrow' }, 429);
+  if (!admin && !(await spend(env, who, size, 1))) return json({ error: 'The daily upload limit for your account is used up, try tomorrow' }, 429);
   const [peek, body] = request.body.tee();
   const reader = peek.getReader();
   const first = await reader.read();
@@ -572,7 +595,7 @@ const publish = async (request, env, url) => {
   const id = newId();
   await upload(env, `${id}.gcast`, body.pipeThrough(checker({ last: true })), 'application/octet-stream', size);
   const edit = token();
-  const entry = { id, slug: slugify(given.title) || id, ...given, size, ...info, poster: false, added: new Date().toISOString().slice(0, 10), ...(admin ? {} : { token: edit, who }) };
+  const entry = { id, slug: slugify(given.title) || id, ...given, size, ...info, poster: false, added: new Date().toISOString().slice(0, 10), ...(admin ? {} : { token: edit, who, email }) };
   const answer = await remember(env, entry);
   return admin ? answer : json({ ...visible(entry), token: edit }, 201);
 };
@@ -874,7 +897,7 @@ export default {
       if (image && request.method === 'POST') return poster(request, env, image[1]);
       const captions = /^\/subtitles\/([\w-]{11})$/.exec(url.pathname);
       if (captions && request.method === 'POST') return subtitles(request, env, captions[1]);
-      if (url.pathname === '/') return json({ hub: 'gcast hub', storage: 'Google Drive', files: '/v/<id>.gcast', upload: 'POST /upload?title=&license=&listed=1&source= with a .gcast body; anonymous uploads wait for review' });
+      if (url.pathname === '/') return json({ hub: 'gcast hub', storage: 'Google Drive', files: '/v/<id>.gcast', upload: 'POST /upload?title=&license=&listed=1&source= with a .gcast body and a Google sign-in (authorization: Bearer <ID token>); uploads wait for review' });
       return json({ error: 'Not found' }, 404);
     } catch (error) {
       return json({ error: error.message }, 500);

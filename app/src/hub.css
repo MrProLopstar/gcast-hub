@@ -197,3 +197,23 @@ html, body { overflow-x: hidden; }
 .up-next { position: absolute; right: 16px; bottom: 72px; z-index: 2; display: grid; gap: 6px; max-width: min(340px, calc(100% - 32px)); padding: 14px; border-radius: 12px; background: rgba(12, 15, 20, 0.92); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
 .up-next strong { font-size: 15px; }
 @media (max-width: 640px) { .continue { padding: 0 12px; } .row-scroll { grid-auto-columns: minmax(200px, 70vw); } .up-next { right: 8px; bottom: 56px; } }
+
+/* sign-in pages (admin, glc login) and the Google button inside dialogs */
+.login { min-height: 100dvh; display: grid; place-items: center; padding: 16px; }
+.login .panel { width: min(400px, 100%); }
+.login .logo { font-size: 22px; }
+.login .google { min-height: 44px; display: grid; justify-items: center; }
+.login .or { text-align: center; }
+.login .google iframe { color-scheme: light; }
+.signin { display: grid; gap: 10px; justify-items: start; padding: 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 10%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.signin p { margin: 0; }
+.signin .google { min-height: 44px; }
+.signin .google iframe { color-scheme: light; }
+/* the rules page */
+.rules { width: min(760px, 100%); margin: 0 auto; padding: 24px 16px 64px; line-height: 1.6; }
+.rules h1 { font-size: 28px; margin: 8px 0 20px; }
+.rules h2 { font-size: 18px; margin: 28px 0 8px; }
+.rules ul { padding-left: 20px; display: grid; gap: 6px; }
+.rules a { color: var(--accent); }
+.foot { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+.foot a { color: inherit; }

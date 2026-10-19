@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { catalog, clock, fileUrl, licenseName, megabytes, meta, myVote, plural, sources, stats, upload, view, vote, worker, LICENSES, type Stats, type Video } from './api';
+import { catalog, clock, fileUrl, googleButton, licenseName, megabytes, meta, myVote, plural, saveGoogle, savedGoogle, sources, stats, upload, view, vote, worker, LICENSES, type Stats, type Video } from './api';
 import { Ambient, Player } from './Player';
 import { Live, LiveWatch } from './Live';
 import { forget, remember, resumeAt, spots } from './progress';
@@ -385,6 +385,12 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
   const [description, setDescription] = useState('');
   const [share, setShare] = useState<number | null>(null);
   const [status, setStatus] = useState('');
+  const [google, setGoogle] = useState(savedGoogle);
+  const button = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (google || !button.current) return;
+    googleButton(button.current, setGoogle).catch(() => setStatus('Не получилось показать вход через Google, обновите страницу.'));
+  }, [google]);
   const send = async () => {
     if (!file || !title.trim()) return;
     setShare(0);
@@ -393,7 +399,7 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
       const query = new URLSearchParams({ title: title.trim(), license, listed: license === 'own' ? '0' : '1' });
       if (source.trim()) query.set('source', source.trim());
       if (description.trim()) query.set('description', description.trim().slice(0, 1500));
-      const entry = await upload(file, query, {}, setShare);
+      const entry = await upload(file, query, { google }, setShare);
       const who = { token: entry.token ?? '' };
       const files = await worker();
       const extra = async (path: string, body: File, type: string) => {
@@ -405,7 +411,13 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
       setStatus(entry.review ? 'Готово. После проверки видео появится в общем списке, по ссылке оно уже открывается.' : 'Готово.');
       done({ ...entry, poster: Boolean(poster), subtitles: Boolean(captions) });
     } catch (error) {
-      setStatus(`Не получилось: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      if (/sign in/i.test(message)) {
+        // the sign-in ran out (Google's tokens live an hour): ask again
+        saveGoogle('');
+        setGoogle('');
+        setStatus('Вход устарел, войдите через Google ещё раз.');
+      } else setStatus(`Не получилось: ${message}`);
     } finally {
       setShare(null);
     }
@@ -414,6 +426,12 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
     <div className="dialog" role="dialog" aria-modal="true" aria-label="Загрузка видео" onClick={(event) => event.target === event.currentTarget && share === null && close()}>
       <div className="panel upload">
         <h2>Загрузить видео</h2>
+        {!google && (
+          <div className="signin">
+            <p>Чтобы загрузить видео, войдите через Google. Адрес никому не показывается: он нужен, чтобы ограничить загрузки и разобраться с жалобами.</p>
+            <div ref={button} className="google" />
+          </div>
+        )}
         <p className="note">
           Нужен готовый <code>.gcast</code>: сделайте его в <a href="https://gcast.1lop.ru/">конвертере</a> или командой <code>npx glyphcast encode видео.mp4 --detail --embed --poster</code>.
         </p>
@@ -461,14 +479,14 @@ const Upload = ({ close, done }: { close: () => void; done: (video: Video) => vo
         )}
         {status && <p className={status.startsWith('Не') ? 'error' : 'note'}>{status}</p>}
         <div className="row">
-          <button type="button" className="button primary" disabled={!file || !title.trim() || share !== null} onClick={() => void send()}>
+          <button type="button" className="button primary" disabled={!google || !file || !title.trim() || share !== null} onClick={() => void send()}>
             {share === null ? 'Опубликовать' : `Загрузка ${Math.round(share * 100)}%`}
           </button>
           <button type="button" className="button ghost" disabled={share !== null} onClick={close}>
             Закрыть
           </button>
         </div>
-        <p className="note">Видео со свободной лицензией попадают в общий список после проверки, остальные открываются по ссылке.</p>
+        <p className="note">Видео со свободной лицензией попадают в общий список после проверки, остальные открываются по ссылке. Загружая видео, вы соглашаетесь с <a href="/rules" target="_blank">правилами</a>.</p>
       </div>
     </div>
   );
@@ -543,6 +561,9 @@ const App = () => {
         />
       )}
       {dialog === 'live' && files && <Live files={files} close={() => setDialog(null)} />}
+      <footer className="foot">
+        <a href="/rules">Правила и конфиденциальность</a> · <a href="https://github.com/MrProLopstar/glyphcast">glyphcast</a>
+      </footer>
     </>
   );
 };
