@@ -282,7 +282,47 @@ const hidden = (env) => env.INDEX.get(env.INDEX.idFromName('unlisted'));
 
 const keepHidden = (env, entry) => hidden(env).fetch('https://index/put', { method: 'POST', body: JSON.stringify(entry) });
 
+/** Base64 of UTF-8 text, for mail headers and bodies. */
+const utf8Base64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+
+/**
+ * Tells the admins that a video waits for review: a plain letter through Cloudflare Email Routing (the MAIL binding),
+ * from hub@ the hub's domain to every address in ADMIN_EMAIL. Without the binding or routing nothing is sent.
+ */
+const notifyReview = async (env, entry) => {
+  if (!env.MAIL || !env.ADMIN_EMAIL) return;
+  const { EmailMessage } = await import('cloudflare:email');
+  const from = env.MAIL_FROM ?? 'hub@1lop.ru';
+  const minutes = entry.frames && entry.fps ? `${Math.floor(entry.frames / entry.fps / 60)}:${String(Math.round(entry.frames / entry.fps) % 60).padStart(2, '0')}` : '?';
+  const text = [
+    'На gcast hub загрузили видео, оно ждёт одобрения.',
+    '',
+    `Название: ${entry.title}`,
+    `Длина: ${minutes}, сетка ${entry.cols}×${entry.rows}, ${(entry.size / 1048576).toFixed(1)} МБ`,
+    `Загрузил: ${entry.email ?? 'неизвестно'}`,
+    '',
+    `Посмотреть: ${HUB_SITE}/?v=${entry.id}`,
+    `Одобрить в админке: ${HUB_SITE}/admin`,
+  ].join('\r\n');
+  for (const to of env.ADMIN_EMAIL.split(',').map((item) => item.trim()).filter(Boolean)) {
+    const raw = [
+      `From: gcast hub <${from}>`,
+      `To: ${to}`,
+      `Subject: =?UTF-8?B?${utf8Base64(`Видео ждёт одобрения: ${entry.title}`)}?=`,
+      `Message-ID: <${entry.id}.${Date.now()}@${from.split('@')[1]}>`,
+      `Date: ${new Date().toUTCString()}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      utf8Base64(text).replace(/.{76}/g, '$&\r\n'),
+    ].join('\r\n');
+    await env.MAIL.send(new EmailMessage(from, to, raw)).catch((error) => console.log('review mail:', error.message));
+  }
+};
+
 const remember = async (env, entry) => {
+  if (entry.review) await notifyReview(env, entry);
   if (entry.listed) await catalog(env, (videos) => {
     entry = visible(entry);
     const taken = new Set(videos.map((video) => video.slug));

@@ -20,3 +20,7 @@ new_sqlite_classes = ["Room"]
 tag = "v2"
 new_sqlite_classes = ["Index"]
 
+
+# review letters to ADMIN_EMAIL through Cloudflare Email Routing
+[[send_email]]
+name = "MAIL"
