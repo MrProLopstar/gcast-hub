@@ -42,7 +42,7 @@ export const licenseName = (license: string): string => LICENSES.find(([value]) 
 let base: Promise<string> | null = null;
 /** The worker address from hub.json, so the site can move to another worker without a rebuild. */
 export const worker = (): Promise<string> =>
-  (base ??= fetch('/hub.json', { cache: 'no-cache' })
+  (base ??= fetch('/hub.json', { cache: 'no-cache', signal: AbortSignal.timeout(8000) })
     .then((response) => response.json() as Promise<{ files: string }>)
     .then((config) => config.files.replace(/\/$/, '')));
 
@@ -61,19 +61,19 @@ const read = async <T,>(response: Response): Promise<T> => {
   return data;
 };
 
-export const catalog = async (): Promise<Video[]> => read<Video[]>(await fetch(`${await worker()}/videos`, { cache: 'no-cache' }));
+export const catalog = async (): Promise<Video[]> => read<Video[]>(await fetch(`${await worker()}/videos`, { cache: 'no-cache', signal: AbortSignal.timeout(10000) }));
 
 export const meta = async (id: string): Promise<Video | null> => {
-  const response = await fetch(`${await worker()}/meta/${id}`);
-  return response.ok ? ((await response.json()) as Video) : null;
+  const response = await fetch(`${await worker()}/meta/${id}`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+  return response?.ok ? ((await response.json()) as Video) : null;
 };
 
 export const stats = async (ids: readonly string[]): Promise<Record<string, Stats>> =>
-  ids.length ? read<Record<string, Stats>>(await fetch(`${await worker()}/stats?ids=${ids.slice(0, 100).join(',')}`)) : {};
+  ids.length ? read<Record<string, Stats>>(await fetch(`${await worker()}/stats?ids=${ids.slice(0, 100).join(',')}`, { signal: AbortSignal.timeout(8000) })) : {};
 
-export const view = async (id: string): Promise<Stats> => read<Stats>(await fetch(`${await worker()}/view/${id}`, { method: 'POST' }));
-export const vote = async (id: string, value: -1 | 0 | 1): Promise<Stats> => read<Stats>(await fetch(`${await worker()}/vote/${id}?value=${value}`, { method: 'POST' }));
-export const myVote = async (id: string): Promise<number> => (await read<{ vote: number }>(await fetch(`${await worker()}/mine/${id}`))).vote;
+export const view = async (id: string): Promise<Stats> => read<Stats>(await fetch(`${await worker()}/view/${id}`, { method: 'POST', signal: AbortSignal.timeout(8000) }));
+export const vote = async (id: string, value: -1 | 0 | 1): Promise<Stats> => read<Stats>(await fetch(`${await worker()}/vote/${id}?value=${value}`, { method: 'POST', signal: AbortSignal.timeout(8000) }));
+export const myVote = async (id: string): Promise<number> => (await read<{ vote: number }>(await fetch(`${await worker()}/mine/${id}`, { signal: AbortSignal.timeout(8000) }))).vote;
 
 /** Headers that prove who is calling: the admin's Google sign-in or hub key, or an uploader's edit token. */
 export interface Credentials {
