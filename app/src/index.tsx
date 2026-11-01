@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { catalog, clock, fileUrl, googleButton, licenseName, megabytes, meta, myVote, plural, saveGoogle, savedGoogle, sources, stats, upload, view, vote, worker, LICENSES, type Stats, type Video } from './api';
+import { catalog, clock, fileUrl, getActiveWorker, googleButton, licenseName, megabytes, meta, myVote, plural, saveGoogle, savedGoogle, sources, stats, upload, view, vote, worker, LICENSES, type Stats, type Video } from './api';
 import { Ambient, Player } from './Player';
 import { Live, LiveWatch } from './Live';
 import { forget, remember, resumeAt, spots } from './progress';
@@ -41,30 +41,55 @@ const Watched = ({ id }: { id: string }) => {
   );
 };
 
-const Card = ({ video, files, stat }: { video: Video; files: string; stat?: Stats }) => (
-  <a
-    className="card"
-    href={`?v=${encodeURIComponent(video.id)}`}
-    onClick={(event) => {
-      if (event.metaKey || event.ctrlKey) return;
-      event.preventDefault();
-      go(`?v=${encodeURIComponent(video.id)}`);
-    }}
-  >
-    <div className="thumb">
-      {video.poster ? <img loading="lazy" alt="" src={fileUrl(files, video, 'jpg')} /> : <div className="glyphs">⣿⡇⠶</div>}
-      <time>{clock(video.duration)}</time>
-      <Watched id={video.id} />
-    </div>
-    <div>
-      <h3>{video.title}</h3>
-      <div className="meta">
-        {stat ? `${views(stat.views)} · ` : ''}
-        {ago(video.added)}
+const Card = ({ video, files, stat }: { video: Video; files: string; stat?: Stats }) => {
+  const initial = fileUrl(files, video, 'jpg');
+  const [src, setSrc] = useState(initial);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setSrc(fileUrl(files, video, 'jpg'));
+    setFailed(false);
+  }, [files, video.id]);
+
+  const onError = () => {
+    if (src.includes('aniclap.workers.dev')) {
+      setSrc(src.replace('https://gcast-hub.aniclap.workers.dev', 'https://glc-api.1lop.ru'));
+    } else if (src.includes('glc-api.1lop.ru')) {
+      setSrc(src.replace('https://glc-api.1lop.ru', 'https://gcast-hub.aniclap.workers.dev'));
+    } else {
+      setFailed(true);
+    }
+  };
+
+  return (
+    <a
+      className="card"
+      href={`?v=${encodeURIComponent(video.id)}`}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey) return;
+        event.preventDefault();
+        go(`?v=${encodeURIComponent(video.id)}`);
+      }}
+    >
+      <div className="thumb">
+        {video.poster && !failed ? (
+          <img loading="lazy" alt="" src={src} onError={onError} />
+        ) : (
+          <div className="glyphs">⣿⡇⠶</div>
+        )}
+        <time>{clock(video.duration)}</time>
+        <Watched id={video.id} />
       </div>
-    </div>
-  </a>
-);
+      <div>
+        <h3>{video.title}</h3>
+        <div className="meta">
+          {stat ? `${views(stat.views)} · ` : ''}
+          {ago(video.added)}
+        </div>
+      </div>
+    </a>
+  );
+};
 
 /** Shows cards a page at a time; the next page loads when the end of the list scrolls into view. */
 const Grid = ({ videos, files, className = 'grid' }: { videos: Video[]; files: string; className?: string }) => {
@@ -496,15 +521,17 @@ const App = () => {
   const [route, setRoute] = useState<Route>(readRoute);
   const [videos, setVideos] = useState<Video[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [files, setFiles] = useState('');
+  const [files, setFiles] = useState(getActiveWorker);
   const [dialog, setDialog] = useState<'upload' | 'live' | null>(null);
   const [text, setText] = useState(route.page === 'home' ? route.query : '');
   useEffect(() => {
     const update = () => setRoute(readRoute());
     addEventListener('popstate', update);
-    void worker().then(setFiles);
-    void catalog()
-      .then(setVideos)
+    void Promise.all([worker(), catalog()])
+      .then(([endpoint, list]) => {
+        setFiles(endpoint);
+        setVideos(list);
+      })
       .catch(() => setVideos([]))
       .finally(() => setLoaded(true));
     return () => removeEventListener('popstate', update);

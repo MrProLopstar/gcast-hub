@@ -41,6 +41,9 @@ export const licenseName = (license: string): string => LICENSES.find(([value]) 
 
 let base: Promise<string> | null = null;
 let preloadedVideos: Video[] | null = null;
+let activeWorker = 'https://gcast-hub.aniclap.workers.dev';
+
+export const getActiveWorker = (): string => activeWorker;
 
 /** The worker address from hub.json or fastest responding mirror. */
 export const worker = (): Promise<string> =>
@@ -56,7 +59,10 @@ export const worker = (): Promise<string> =>
         .filter((v, i, a): v is string => Boolean(v) && a.indexOf(v) === i)
         .map((c) => c.replace(/\/$/, ''));
 
-      if (candidates.length === 1) return candidates[0]!;
+      if (candidates.length === 1) {
+        activeWorker = candidates[0]!;
+        return activeWorker;
+      }
 
       return Promise.any(
         candidates.map(async (url) => {
@@ -65,13 +71,19 @@ export const worker = (): Promise<string> =>
           const list = (await res.json()) as Video[];
           if (!Array.isArray(list)) throw new Error('Not an array');
           preloadedVideos = list;
+          activeWorker = url;
           return url;
         }),
-      ).catch(() => candidates[0]!);
+      ).catch(() => {
+        activeWorker = candidates[0]!;
+        return activeWorker;
+      });
     }));
 
-export const fileUrl = (files: string, video: Pick<Video, 'id'>, kind: 'gcast' | 'jpg' | 'vtt', cols?: number): string =>
-  `${files}/v/${video.id}${cols ? `-${cols}` : ''}.${kind}`;
+export const fileUrl = (files: string, video: Pick<Video, 'id'>, kind: 'gcast' | 'jpg' | 'vtt', cols?: number): string => {
+  const root = files || activeWorker || 'https://gcast-hub.aniclap.workers.dev';
+  return `${root}/v/${video.id}${cols ? `-${cols}` : ''}.${kind}`;
+};
 
 /** Quality choices for the player, or undefined when there is only one grid. */
 export const sources = (files: string, video: Video): string | undefined =>
