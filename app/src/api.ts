@@ -40,11 +40,35 @@ export const LICENSES: readonly (readonly [string, string])[] = [
 export const licenseName = (license: string): string => LICENSES.find(([value]) => value === license)?.[1] ?? license;
 
 let base: Promise<string> | null = null;
-/** The worker address from hub.json, so the site can move to another worker without a rebuild. */
+let preloadedVideos: Video[] | null = null;
+
+/** The worker address from hub.json or fastest responding mirror. */
 export const worker = (): Promise<string> =>
   (base ??= fetch('/hub.json', { cache: 'no-cache', signal: AbortSignal.timeout(8000) })
-    .then((response) => response.json() as Promise<{ files: string }>)
-    .then((config) => config.files.replace(/\/$/, '')));
+    .then((response) => response.json() as Promise<{ files: string; alt?: string; fallbacks?: string[] }>)
+    .then(async (config) => {
+      const candidates = [
+        config.files,
+        ...(config.fallbacks ?? (config.alt ? [config.alt] : [])),
+        'https://gcast-hub.aniclap.workers.dev',
+        'https://glc-api.1lop.ru',
+      ]
+        .filter((v, i, a): v is string => Boolean(v) && a.indexOf(v) === i)
+        .map((c) => c.replace(/\/$/, ''));
+
+      if (candidates.length === 1) return candidates[0]!;
+
+      return Promise.any(
+        candidates.map(async (url) => {
+          const res = await fetch(`${url}/videos`, { cache: 'no-cache', signal: AbortSignal.timeout(5000) });
+          if (!res.ok) throw new Error(`${url} HTTP ${res.status}`);
+          const list = (await res.json()) as Video[];
+          if (!Array.isArray(list)) throw new Error('Not an array');
+          preloadedVideos = list;
+          return url;
+        }),
+      ).catch(() => candidates[0]!);
+    }));
 
 export const fileUrl = (files: string, video: Pick<Video, 'id'>, kind: 'gcast' | 'jpg' | 'vtt', cols?: number): string =>
   `${files}/v/${video.id}${cols ? `-${cols}` : ''}.${kind}`;
@@ -61,7 +85,15 @@ const read = async <T,>(response: Response): Promise<T> => {
   return data;
 };
 
-export const catalog = async (): Promise<Video[]> => read<Video[]>(await fetch(`${await worker()}/videos`, { cache: 'no-cache', signal: AbortSignal.timeout(10000) }));
+export const catalog = async (): Promise<Video[]> => {
+  await worker();
+  if (preloadedVideos) {
+    const list = preloadedVideos;
+    preloadedVideos = null;
+    return list;
+  }
+  return read<Video[]>(await fetch(`${await worker()}/videos`, { cache: 'no-cache', signal: AbortSignal.timeout(10000) }));
+};
 
 export const meta = async (id: string): Promise<Video | null> => {
   const response = await fetch(`${await worker()}/meta/${id}`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
